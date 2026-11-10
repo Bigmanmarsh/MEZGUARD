@@ -15,7 +15,7 @@ const PUBLIC = fileURLToPath(new URL('./public/', import.meta.url));
 const STATE_FILE = fileURLToPath(new URL('./data/state.json', import.meta.url));
 const EXPLORER = 'https://explorer.test.mezo.org';
 // Telegram bot: env vars on the host, or secrets/telegram.json ({"token": "...", "bot": "BotUsername"}) locally. Never committed.
-const tgFile = fileURLToPath(new URL('../secrets/telegram.json', import.meta.url));
+const tgFile = [fileURLToPath(new URL('../secrets/telegram.json', import.meta.url)), '/etc/secrets/telegram.json'].find((f) => existsSync(f)) || '';
 const tgLocal = existsSync(tgFile) ? JSON.parse(readFileSync(tgFile, 'utf8')) : {};
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || tgLocal.token || null;
 const TG_BOT = process.env.TELEGRAM_BOT_NAME || tgLocal.bot || null;
@@ -193,6 +193,7 @@ function memo(key, ttlMs, fn) {
   return hit?.has ? Promise.resolve(hit.val) : entry.p;
 }
 const routes = {
+  'GET /healthz': async () => ({ ok: true, keeper: !!keeper, guard: lastGuard?.overall ?? 'starting' }), // keep-awake ping target
   'GET /api/config': () => memo('config', 300_000, async () => {
     const [treasury, feeBps, freeUpTo] = await read(DEPLOY.factory, ABI.factory, 'feeConfig');
     return { chain: { id: mezoTestnet.id, name: mezoTestnet.name, rpc: mezoTestnet.rpcUrls.default.http[0], explorer: EXPLORER },

@@ -14,8 +14,11 @@ export const base = createPublicClient({ transport: t(process.env.BASE_RPC || 'h
 
 function loadKey() {
   if (process.env.KEEPER_KEY) return process.env.KEEPER_KEY;
-  const f = new URL('secrets/dev-wallet.json', root);
-  return existsSync(f) ? JSON.parse(readFileSync(f)).privateKey : null;
+  // Locally: secrets/dev-wallet.json. On Render: the same file uploaded as a Secret File (/etc/secrets).
+  for (const f of [new URL('secrets/dev-wallet.json', root), '/etc/secrets/dev-wallet.json']) {
+    if (existsSync(f)) return JSON.parse(readFileSync(f)).privateKey;
+  }
+  return null;
 }
 const key = loadKey();
 export const keeper = key ? privateKeyToAccount(key) : null;

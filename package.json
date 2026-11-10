@@ -1,14 +1,15 @@
 {
-  "name": "hack3",
+  "name": "mezguard",
   "version": "1.0.0",
-  "description": "",
+  "description": "Guarded dollar savings on Mezo: MUSD savings vault + a Guard that watches for danger",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node app/server.mjs",
+    "test": "FORK=testnet npx hardhat test"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@openzeppelin/contracts": "^5.1.0",
@@ -17,5 +18,8 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "hardhat": "^2.22.19"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
