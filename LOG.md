@@ -17,3 +17,10 @@ Deadline: Thu 13 Nov 2026, 05:30 UTC (06:30 Lagos). Target: Wed 12 Nov.
 - Dev/keeper wallet created: 0xCEA259b22B76c253581C789400F7347B37Aeec83 (key in secrets/, gitignored).
 - Blocker: the keeper needs a few $ of BTC on Mezo mainnet for gas. Researching the cheapest route.
 - BUDGET IS $0 (Marshall). Switched to: live app on Mezo testnet (official testnet sMUSD 0x6f46…8e16 + canonical test MUSD), with mainnet paths proven in fork tests and Guard/Whale/report data read from real mainnet. Free test MUSD faucet in-app for testers. Mainnet launch waits on a gas grant.
+
+## 2026-11-10
+- Faucet: 0.05 test BTC to the dev wallet. Opened a testnet trove (0.048 BTC, ICR ~179%) and minted 1,800 test MUSD for the tester faucet. tx 0x62cb27bd…1fc4c.
+- Contracts: MezGuardFactory + MezGuardAccount (clone per saver). Owner-only deposit/withdraw, permissionless sweep (for bridge deliveries), gasless EIP-712 withdrawWithSig, claim, a keeper-only guardExit (only while the owner has the Guard on; funds only to the owner), and a 10% fee on interest only when principal > $100 (capped at 10% in code).
+- 9/9 fork tests pass against the REAL testnet sMUSD (0x6f46…8e16), including interest from receiveProtocolYield.
+- Deployed on Mezo testnet: factory 0x73C0Dc60D6Ea3bEc8b2a40914f8a2Ff73E2aB5E4 (verified), implementation 0x75DAE3b1d34F4B530f54F49338a117d4528b3d65.
+- LIVE E2E on testnet (dev wallet as saver), account 0xc3ED6BC0…AAfB: create, deposit 100, bridge-style send 10 + sweep, withdraw 20, gasless withdrawWithSig 5. Final saved 85.

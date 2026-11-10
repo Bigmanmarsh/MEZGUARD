@@ -1,0 +1,12 @@
+{
+  "network": "mezoTestnet",
+  "chainId": 31611,
+  "factory": "0x73C0Dc60D6Ea3bEc8b2a40914f8a2Ff73E2aB5E4",
+  "implementation": "0x75DAE3b1d34F4B530f54F49338a117d4528b3d65",
+  "vault": "0x6f461c68B2c5492C0F5CCEc5a264d692aA7A8e16",
+  "musd": "0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503",
+  "keeper": "0xCEA259b22B76c253581C789400F7347B37Aeec83",
+  "treasury": "0xCEA259b22B76c253581C789400F7347B37Aeec83",
+  "deployTx": "0x85c785bce0250635ef5bf238a12bdec973edafd16d4ff468bad595a16cd8e7b1",
+  "at": "2026-11-10T06:37:07.168Z"
+}
