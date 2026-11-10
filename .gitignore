@@ -8,3 +8,4 @@ research/*.json
 artifacts/
 cache/
 typechain-types/
+app/data/

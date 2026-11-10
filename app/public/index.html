@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MezGuard: guarded dollar savings</title>
+<meta name="description" content="Save dollars and earn about 5% a year in Mezo's MUSD savings vault, with a Guard that watches for danger and moves your money home.">
+<meta name="theme-color" content="#0f1a14">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/style.css?v=2">
+</head>
+<body>
+<header class="top">
+  <a href="/" class="brand" data-link><img src="/icon.svg" alt="" width="26" height="26"> MezGuard</a>
+  <button id="wallet" class="chip">Connect wallet</button>
+</header>
+<div id="banner" class="banner" hidden></div>
+<main id="view" aria-live="polite"><div class="loading">Loading…</div></main>
+<nav class="tabs" aria-label="Main">
+  <a href="/" data-link data-tab="home"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home</a>
+  <a href="/guard" data-link data-tab="guard"><svg viewBox="0 0 24 24"><path d="M12 2l8 3v6c0 5-3.5 9.5-8 11-4.5-1.5-8-6-8-11V5z"/></svg>Guard</a>
+  <a href="/reports" data-link data-tab="reports"><svg viewBox="0 0 24 24"><path d="M4 20V10h4v10zm6 0V4h4v16zm6 0v-7h4v7z"/></svg>Reports</a>
+</nav>
+<div id="sheet" class="sheet" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js?v=5" type="module"></script>
+</body>
+</html>

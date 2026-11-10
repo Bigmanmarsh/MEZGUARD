@@ -8,5 +8,6 @@
   "keeper": "0xCEA259b22B76c253581C789400F7347B37Aeec83",
   "treasury": "0xCEA259b22B76c253581C789400F7347B37Aeec83",
   "deployTx": "0x85c785bce0250635ef5bf238a12bdec973edafd16d4ff468bad595a16cd8e7b1",
-  "at": "2026-11-10T06:37:07.168Z"
+  "at": "2026-11-10T06:37:07.168Z",
+  "deployBlock": 16688060
 }
