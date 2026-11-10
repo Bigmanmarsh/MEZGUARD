@@ -14,8 +14,11 @@ const PORT = Number(process.env.PORT || 8787);
 const PUBLIC = fileURLToPath(new URL('./public/', import.meta.url));
 const STATE_FILE = fileURLToPath(new URL('./data/state.json', import.meta.url));
 const EXPLORER = 'https://explorer.test.mezo.org';
-const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
-const TG_BOT = process.env.TELEGRAM_BOT_NAME || null;
+// Telegram bot: env vars on the host, or secrets/telegram.json ({"token": "...", "bot": "BotUsername"}) locally. Never committed.
+const tgFile = fileURLToPath(new URL('../secrets/telegram.json', import.meta.url));
+const tgLocal = existsSync(tgFile) ? JSON.parse(readFileSync(tgFile, 'utf8')) : {};
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || tgLocal.token || null;
+const TG_BOT = process.env.TELEGRAM_BOT_NAME || tgLocal.bot || null;
 const EXAMPLE = process.env.EXAMPLE_OWNER || DEPLOY.keeper;
 const DRIP_MUSD =parseEther(process.env.DRIP_MUSD || '20');
 const DRIP_BTC = parseEther('0.00001'); // enough test BTC for thousands of Mezo testnet transactions
