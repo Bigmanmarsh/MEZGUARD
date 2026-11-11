@@ -193,7 +193,7 @@ function memo(key, ttlMs, fn) {
   return hit?.has ? Promise.resolve(hit.val) : entry.p;
 }
 const routes = {
-  'GET /healthz': async () => ({ ok: true, keeper: !!keeper, guard: lastGuard?.overall ?? 'starting' }), // keep-awake ping target
+  'GET /healthz': async () => ({ ok: true, keeper: !!keeper, store: storeKind, guard: lastGuard?.overall ?? 'starting' }), // keep-awake ping target
   'GET /api/config': () => memo('config', 300_000, async () => {
     const [treasury, feeBps, freeUpTo] = await read(DEPLOY.factory, ABI.factory, 'feeConfig');
     return { chain: { id: mezoTestnet.id, name: mezoTestnet.name, rpc: mezoTestnet.rpcUrls.default.http[0], explorer: EXPLORER },
