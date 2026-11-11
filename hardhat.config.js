@@ -8,7 +8,12 @@ module.exports = {
   solidity: { version: "0.8.28", settings: { optimizer: { enabled: true, runs: 500 }, evmVersion: "paris" } },
   networks: {
     hardhat: FORK
-      ? { chainId: FORK === "mainnet" ? 31612 : 31611, forking: { url: FORK === "mainnet" ? "https://mezo.drpc.org" : "https://rpc.test.mezo.org" } }
+      ? {
+          chainId: FORK === "mainnet" ? 31612 : 31611,
+          forking: { url: FORK === "mainnet" ? "https://mezo.drpc.org" : "https://rpc.test.mezo.org" },
+          // Mezo is not in Hardhat's built-in chain list: tell it which EVM rules to use for forked blocks.
+          chains: { 31612: { hardforkHistory: { shanghai: 0 } }, 31611: { hardforkHistory: { shanghai: 0 } } },
+        }
       : {},
     mezoTestnet: { url: "https://rpc.test.mezo.org", chainId: 31611, accounts: dev ? [dev.privateKey] : [] },
   },

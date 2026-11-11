@@ -10,6 +10,22 @@ MezGuard lets anyone save dollars in Mezo's MUSD Savings Rate vault (sMUSD, abou
 - **Reports** come weekly and monthly. Each has one big number, the amount in dollars and naira, a comparison with plain USDC, and an anonymous ranking of your saving habits (never your size) against other MezGuard savers.
 - **Telegram:** sign in with Telegram (@Mezguardbot) to get alerts. You don't need to create your own bot.
 
+## Two ways to use it
+- **Mezo mainnet (default): direct mode.** Savers deposit real MUSD into Mezo's official savings vault (sMUSD, `0xb4D4…51CC`) from their own wallet. MezGuard never holds the money. Gas is about $0.01 per action, in BTC.
+  - The app counts sMUSD staked in Mezo's gauge as savings, and shows the MEZO rewards earned.
+  - "Take out" and "Move my money home" unstake first when needed.
+  - On danger, the Guard alerts you here and on Telegram. One tap brings everything home.
+  - Reports rank your saving habits against real savers in Mezo's vault.
+- **Test network (free): full MezGuard accounts.** Gasless saving and withdrawing, automatic Guard exit, and the fee contract, with free test dollars. These contracts are ready for mainnet with one deploy.
+
+`scripts/mainnet-direct-fork.js` forks Mezo mainnet, impersonates a real saver with staked sMUSD, and sends the exact calldata the web app builds:
+- unstake and withdraw
+- approve and deposit
+- claim interest
+- move everything home
+
+All pass.
+
 ## Business model
 Free up to $100 saved. Above that, MezGuard keeps 10% of the **interest**, never any of the deposit. The cap is enforced in code: `MAX_FEE_BPS = 1000`.
 
@@ -34,7 +50,7 @@ FORK=testnet npx hardhat test      # 9 tests against a fork of Mezo with the rea
 ```
 
 ## Honest limits
-- The app runs on **Mezo testnet**. The Guard, Whale Watch and the rate shown use **real mainnet data**.
+- On mainnet, the full MezGuard account contracts (automatic exit, gasless, on-chain fee) are not deployed yet. Mainnet uses direct mode, where the saver confirms each action. The contracts run on testnet and are ready to deploy.
 - Testnet's vault pays interest in lumps, so reports also show what your balance earns at Mezo's live mainnet rate, and label it that way.
 - The keeper is a single server key for now. It can only send funds to their owners.
 - The implementation contract's explorer verification is still pending (the factory is verified).

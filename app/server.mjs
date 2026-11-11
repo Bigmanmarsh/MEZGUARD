@@ -10,6 +10,8 @@ import { testnet, keeper, keeperWallet, DEPLOY, ABI, mezoTestnet } from './chain
 import { guardStatus, whales, ngnRate } from './guard.mjs';
 import { history, report, forgetHistory } from './report.mjs';
 import { loadState, saveState, storeKind } from './store.mjs';
+import * as M from './mainnet.mjs';
+const { MAINNET } = M;
 
 const PORT = Number(process.env.PORT || 8787);
 const PUBLIC = fileURLToPath(new URL('./public/', import.meta.url));
@@ -25,7 +27,7 @@ const DRIP_BTC = parseEther('0.00001'); // enough test BTC for thousands of Mezo
 const permitAbi = parseAbi(['function permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)', 'function nonces(address) view returns (uint256)', 'function transferFrom(address,address,uint256) returns (bool)']);
 
 // ---------- durable state (Telegram links, faucet gifts, alert log, keeper txs): Upstash or local file ----------
-let state = { drips: {}, telegram: {}, alerts: [], guardStreak: 0, keeperTxs: [], ...(await loadState()) };
+let state = { drips: {}, telegram: {}, alerts: [], guardStreak: 0, keeperTxs: [], mainUsers: {}, mainTxs: [], ...(await loadState()) };
 console.log(`state: ${storeKind}, ${Object.keys(state.telegram).length} Telegram links, ${state.keeperTxs.length} keeper txs`);
 let saveTimer = null;
 function persist() {
@@ -199,8 +201,26 @@ const routes = {
     return { chain: { id: mezoTestnet.id, name: mezoTestnet.name, rpc: mezoTestnet.rpcUrls.default.http[0], explorer: EXPLORER },
       factory: DEPLOY.factory, implementation: DEPLOY.implementation, vault: DEPLOY.vault, musd: DEPLOY.musd, keeper: keeper?.address,
       fee: { treasury, feeBps: Number(feeBps), freeUpTo: Number(formatEther(freeUpTo)) }, telegramBot: TG_BOT, ngn: await ngnRate(),
-      example: EXAMPLE }; // a live account visitors can look at without a wallet
+      example: EXAMPLE, // a live account visitors can look at without a wallet
+      main: MAINNET }; // mainnet direct mode: savers use Mezo's official vault from their own wallet
   }),
+  // ---------- Mezo mainnet, direct mode ----------
+  'GET /api/main/account': async (q) => { const o = ownerFrom(q.get('owner')); return { ...(await M.account(o)), telegram: !!state.telegram[o.toLowerCase()] }; },
+  'GET /api/main/report': async (q) => M.report(ownerFrom(q.get('owner')), q.get('period') === 'month' ? 'month' : 'week'),
+  // The app reports each mainnet transaction a saver makes; we check it on-chain before counting it.
+  'POST /api/main/tx': async (_q, b, req) => {
+    const owner = ownerFrom(b.owner);
+    limit(req, 'maintx', 30, 600_000);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(b.hash || '')) throw httpErr(400, 'Bad transaction hash');
+    if (state.mainTxs.some((t) => t.hash === b.hash)) return { counted: true };
+    let tx = null;
+    for (let i = 0; i < 5 && !tx; i++) { tx = await M.verifyTx(owner, b.hash).catch(() => null); if (!tx) await new Promise((r) => setTimeout(r, 2000)); }
+    if (!tx) throw httpErr(400, 'That transaction is not a MezGuard vault action from this wallet');
+    state.mainTxs.unshift(tx); state.mainTxs = state.mainTxs.slice(0, 500);
+    state.mainUsers[owner.toLowerCase()] ??= Date.now();
+    persist(); M.forgetMain(owner); memoStore.delete('proof');
+    return { counted: true, kind: tx.kind };
+  },
   'GET /api/account': async (q) => { const o = ownerFrom(q.get('owner')); return memo('acct:' + o, 4_000, () => accountInfo(o)); },
   'GET /api/guard': async () => lastGuard && Date.now() - lastGuard.at < 90_000 ? lastGuard : (lastGuard = await guardStatus()),
   'GET /api/whales': async () => whales(),
@@ -220,7 +240,9 @@ const routes = {
   'GET /api/proof': () => memo('proof', 30_000, async () => {
     const accounts = await allAccounts();
     const saved = await Promise.all(accounts.map((a) => read(DEPLOY.vault, ABI.vault, 'balanceOf', [a])));
-    return { factory: DEPLOY.factory, implementation: DEPLOY.implementation, vault: DEPLOY.vault, musd: DEPLOY.musd, deployTx: DEPLOY.deployTx,
+    const users = Object.keys(state.mainUsers);
+    const mainSaved = (await M.vaultBalances(users)).reduce((s, x) => s + x, 0);
+    return { main: { users: users.length, totalSaved: mainSaved, txs: state.mainTxs.slice(0, 15), vault: MAINNET.vault, musd: MAINNET.musd, explorer: MAINNET.explorer }, factory: DEPLOY.factory, implementation: DEPLOY.implementation, vault: DEPLOY.vault, musd: DEPLOY.musd, deployTx: DEPLOY.deployTx,
       accounts: accounts.length, totalSaved: saved.reduce((s, x) => s + Number(formatEther(x)), 0), keeperTxs: state.keeperTxs.slice(0, 15), explorer: EXPLORER };
   }),
   // Create the account, and give new testers 20 test MUSD plus a pinch of test BTC for gas. Once per wallet.
@@ -340,5 +362,5 @@ server.listen(PORT, () => {
 // Keep what a first-time visitor (or a judge's headless browser) sees already computed.
 function warm() {
   const q = (o) => new URLSearchParams({ owner: o, period: 'week' });
-  Promise.allSettled([routes['GET /api/config'](), routes['GET /api/proof'](), routes['GET /api/account'](q(EXAMPLE)), routes['GET /api/report'](q(EXAMPLE))]);
+  Promise.allSettled([routes['GET /api/config'](), routes['GET /api/proof'](), routes['GET /api/account'](q(EXAMPLE)), routes['GET /api/report'](q(EXAMPLE)), M.vaultSavers()]);
 }

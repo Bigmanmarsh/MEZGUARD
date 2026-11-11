@@ -71,7 +71,7 @@ async function loadHistory(account) {
 }
 
 /** Habit score: rewards steady saving, not size. 0-100. */
-function habitScore(h, now) {
+export function habitScore(h, now) {
   const saves = h.filter((e) => e.kind === 'save');
   if (!saves.length) return 0;
   const days = (now - saves[0].at) / 86_400_000;
@@ -97,7 +97,7 @@ async function cohortScores() {
 }
 
 let ngnHist = { at: 0, points: [] };
-async function ngnAgo(days) {
+export async function ngnAgo(days) {
   if (Date.now() - ngnHist.at > 6 * 3600_000) {
     try {
       const j = await fetch('https://api.coingecko.com/api/v3/coins/usd-coin/market_chart?vs_currency=ngn&days=31', { signal: AbortSignal.timeout(8000) }).then((r) => r.json());

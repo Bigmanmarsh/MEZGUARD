@@ -70,3 +70,7 @@ p{margin:6px 0}
 .steps li::before{content:counter(s);position:absolute;left:0;top:5px;width:24px;height:24px;border-radius:50%;background:var(--okbg);color:var(--brand);font-weight:700;font-size:13px;display:grid;place-items:center}
 .foot{text-align:center;color:var(--soft);font-size:13px;margin:22px 0}
 .foot a{color:var(--soft)}
+.chip.net{font-weight:650;max-width:none}
+.net-main{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 40%,var(--line))}
+.net-test{color:var(--watch);border-color:color-mix(in srgb,var(--watch) 40%,var(--line))}
+.row>.chip{flex:none}

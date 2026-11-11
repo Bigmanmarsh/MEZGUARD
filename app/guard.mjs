@@ -140,6 +140,12 @@ export async function ngnRate() {
     const j = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=ngn', { signal: AbortSignal.timeout(8000) }).then((r) => r.json());
     const rate = j?.['usd-coin']?.ngn;
     if (rate) ngnCache = { rate, at: Date.now() };
-  } catch { /* keep last */ }
+  } catch { /* try the backup below */ }
+  if (!ngnCache || Date.now() - ngnCache.at > 30 * 60_000) {
+    try { // backup source (free, no key) when CoinGecko throttles us
+      const j = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(8000) }).then((r) => r.json());
+      if (j?.rates?.NGN) ngnCache = { rate: j.rates.NGN, at: Date.now() };
+    } catch { /* keep last */ }
+  }
   return ngnCache?.rate ?? null;
 }
