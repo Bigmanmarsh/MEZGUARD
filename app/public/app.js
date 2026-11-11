@@ -244,6 +244,7 @@ async function home() {
       <div class="row" style="margin-top:12px"><a class="btn" href="https://mezo.org" target="_blank" rel="noopener">Open Mezo</a><button class="btn ghost" data-act="net-test">Try free first</button></div></div>` : ''}
     ${needsMoney && !isMain() ? `<div class="card"><h2>Get test dollars</h2><p class="muted small">This is the Mezo test network, so the dollars are free test MUSD. We'll send you ${a.dripped ? 'nothing more (one gift per wallet)' : '20 test MUSD and a little test BTC for fees'}.</p>${a.dripped ? '' : '<button class="btn" data-act="onboard">Send me 20 test MUSD</button>'}</div>` : ''}
     <a class="card" href="/guard" data-link style="display:block;text-decoration:none;color:inherit"><div class="toggle"><div><p class="label">Guard</p><b>${isMain() ? 'Watching your savings' : a.guardEnabled ? 'Auto-protect is on' : 'Auto-protect is off'}</b><p class="small muted">${S.guard ? esc(headline(S.guard)) : 'Checking Mezo…'}</p></div>${guardPill(S.guard)}</div></a>
+    ${ro ? '' : telegramCard()}
     <div class="card"><h2>Activity</h2>${activity(a.history)}<p class="small muted" style="margin-top:8px">${isMain() ? 'Your wallet on Mezo' : 'Your savings account'}: <a href="${esc(a.explorer)}" target="_blank" rel="noopener">${short(a.account)}</a></p></div>${footer()}`;
 }
 function activity(h) {
