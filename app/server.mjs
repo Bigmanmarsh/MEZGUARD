@@ -108,13 +108,15 @@ function checkTelegram(data) {
   if (Date.now() / 1000 - Number(rest.auth_date) > 86_400) throw httpErr(401, 'Telegram login is too old');
   return rest;
 }
-async function tgSend(chatId, text) {
+async function tgSend(chatId, text, extra = {}) {
   if (!TG_TOKEN) return;
+  if (process.env.TG_DRY) return console.log(`[tg -> ${chatId}]\n${text}\n${extra.reply_markup ? '[button] ' + extra.reply_markup.inline_keyboard[0][0].url : ''}\n---`); // local tests: print, never send
   try {
     await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }), signal: AbortSignal.timeout(8000) });
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...extra }), signal: AbortSignal.timeout(8000) });
   } catch { /* alerts are best effort */ }
 }
+const tgApi = (method, payload) => fetch(`https://api.telegram.org/bot${TG_TOKEN}/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10000) }).then((r) => r.json());
 function alert(owner, text, level = 'watch') {
   state.alerts.unshift({ owner: owner?.toLowerCase() || '*', text, level, at: Date.now() });
   state.alerts = state.alerts.slice(0, 200);
@@ -166,20 +168,82 @@ async function weeklyReports() {
   if (!TG_TOKEN || now.getUTCDay() !== 1 || now.getUTCHours() < 8 || state.weeklySent === weekKey(now)) return;
   state.weeklySent = weekKey(now); persist();
   for (const [owner, t] of Object.entries(state.telegram)) {
-    try {
-      const o = getAddress(owner);
-      const main = await M.account(o);
-      let r = null, where = "Mezo's savings vault";
-      if (main.saved > 0 || main.history.length) r = await M.report(o, 'week');
-      else {
-        const acc = await accountOf(o);
-        if (await exists(acc)) { r = await report(acc, 'week'); where = 'your MezGuard test account'; }
-      }
-      if (!r) continue;
-      const earned = r.big.usd > 0.00005 ? r.big.usd : r.projected?.period || 0;
-      tgSend(t.id, `🛡 <b>Your MezGuard week</b>\nSaved: <b>$${r.balance.toFixed(2)}</b> in ${where}\nEarned: <b>$${earned.toFixed(4)}</b>${r.naira ? ` (₦${(earned * r.naira.rateNow).toFixed(2)})` : ''}\nPlain USDC would have earned $0.\n${r.rank.beatPercent != null ? `Your saving habits beat ${r.rank.beatPercent}% of savers.` : ''}\nhttps://mezguard.onrender.com/reports`);
-    } catch { /* one saver's report failing never stops the others */ }
+    try { const txt = await reportText(getAddress(owner)); if (txt) tgSend(t.id, txt); } catch { /* one saver's report failing never stops the others */ }
   }
+}
+
+// ---------- Telegram bot commands (webhook) ----------
+const APP_URL = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || null; // Render sets RENDER_EXTERNAL_URL itself
+const TG_SECRET = TG_TOKEN ? createHash('sha256').update('mezguard-webhook:' + TG_TOKEN).digest('hex').slice(0, 48) : null;
+const SITE = APP_URL || 'https://mezguard.onrender.com';
+const money = (v, d = 2) => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const naira = (v) => '₦' + Math.round(v).toLocaleString('en-US');
+const openApp = (path = '/', label = 'Open MezGuard') => ({ reply_markup: { inline_keyboard: [[{ text: label, url: SITE + path }]] } });
+
+/** Which savings does this wallet have: Mezo mainnet (direct) or a MezGuard test account? */
+async function savingsOf(o) {
+  const main = await M.account(o);
+  if (main.saved > 0 || main.history.length) return { net: 'main', a: main, where: "Mezo's savings vault (mainnet)" };
+  const acc = await accountOf(o);
+  if (await exists(acc)) return { net: 'test', a: await accountInfo(o), acc, where: 'your MezGuard account (test network)' };
+  return { net: 'main', a: main, where: "Mezo's savings vault (mainnet)", empty: true };
+}
+async function reportText(o) {
+  const s = await savingsOf(o);
+  if (s.empty) return null;
+  const r = s.net === 'main' ? await M.report(o, 'week') : await report(s.acc, 'week');
+  const earned = r.big.usd > 0.00005 ? r.big.usd : r.projected?.period || 0;
+  return `🛡 <b>Your MezGuard week</b>\nSaved: <b>${money(r.balance)}</b> in ${s.where}\nEarned: <b>${money(earned, 4)}</b>${r.naira ? ` (${naira(earned * r.naira.rateNow)})` : ''}${r.big.usd > 0.00005 ? '' : " at Mezo's live rate"}\nPlain USDC would have earned $0.\n${r.staked > 0.01 ? `Staked in Mezo's gauge: ${money(r.staked)}, earning ${Number(r.mezoRewards).toLocaleString('en-US', { maximumFractionDigits: 2 })} MEZO so far.\n` : ''}${r.rank.beatPercent != null ? `Your saving habits beat ${r.rank.beatPercent}% of savers.` : ''}`;
+}
+function guardText(g) {
+  const dot = { ok: '🟢', watch: '🟡', act: '🔴', unknown: '⚪' };
+  const p = g.peg, v = g.vault, c = g.chain, b = g.bridge;
+  return `🛡 <b>Guard: ${STATUS_WORD[g.overall] || g.overall}</b>\n${dot[p.status]} MUSD price: <b>${p.price ? '$' + p.price.toFixed(3) : 'checking'}</b> (danger below $0.97)\n${dot[v.status]} Savings vault: ${v.apr30d ? `<b>${v.apr30d.toFixed(2)}%</b> a year, ${money(v.supply, 0)} saved` : 'checking'}\n${dot[c.status]} Mezo network: ${c.ageSec != null ? `last block ${c.ageSec}s ago` : 'checking'}\n${dot[b.status]} Bridge to Base: ${b.status === 'ok' ? 'open' : b.status === 'watch' ? 'paused' : 'checking'}\n${g.overall === 'ok' ? 'Everything looks healthy.' : explain(g)}`;
+}
+const STATUS_WORD = { ok: 'all good', watch: 'keep an eye', act: 'danger', unknown: 'checking' };
+const HELP = '/status – live Guard check of MUSD and the vault\n/savings – your savings right now\n/report – your week in one message\n/stop – turn alerts off';
+
+async function onBotMessage(msg) {
+  const chat = msg.chat?.id, text = String(msg.text || '').trim();
+  if (!chat || msg.chat.type !== 'private') return;
+  const cmd = text.split(/[\s@]/)[0].toLowerCase();
+  const linked = Object.entries(state.telegram).find(([, t]) => String(t.id) === String(msg.from?.id));
+  const notLinked = () => tgSend(chat, 'Your Telegram is not linked to a wallet yet. Open MezGuard, connect your wallet and tap <b>Log in with Telegram</b> (on Home or the Guard tab). Your keys never leave your wallet.', openApp());
+  if (cmd === '/start' || cmd === '/help') {
+    return tgSend(chat, `🛡 <b>MezGuard</b>: guarded dollar savings on Mezo.\nSave MUSD in Mezo's savings vault (about ${lastGuard?.vault?.apr30d ? lastGuard.vault.apr30d.toFixed(1) : '5'}% a year). The Guard watches the MUSD price, the vault, the network and the bridge, and warns you here if something goes wrong.\n\n${linked ? `Linked to wallet <code>${linked[0].slice(0, 6)}…${linked[0].slice(-4)}</code>. Alerts are on.` : 'Link your wallet in the app to get alerts.'}\n\n${HELP}`, openApp());
+  }
+  if (cmd === '/status') return tgSend(chat, guardText(lastGuard && Date.now() - lastGuard.at < 120_000 ? lastGuard : (lastGuard = await guardStatus())), openApp('/guard', 'Open the Guard'));
+  if (cmd === '/savings') {
+    if (!linked) return notLinked();
+    const s = await savingsOf(getAddress(linked[0])), a = s.a, rate = await ngnRate();
+    if (s.empty) return tgSend(chat, `Nothing saved yet. Wallet: ${money(a.wallet.musd)} MUSD.\nOpen MezGuard and tap <b>Save</b> to start earning.`, openApp());
+    return tgSend(chat, `💵 <b>Your savings</b> in ${s.where}\n<b>${money(a.saved)}</b>${rate ? ` (${naira(a.saved * rate)})` : ''}\n${a.claimable >= 0.0001 ? `Interest waiting: ${money(a.claimable, 4)}\n` : ''}${a.staked > 0.01 ? `Staked in Mezo's gauge: ${money(a.staked)}, ${Number(a.mezoRewards).toLocaleString('en-US', { maximumFractionDigits: 2 })} MEZO earned\n` : ''}In your wallet: ${money(a.wallet.musd)} MUSD`, openApp());
+  }
+  if (cmd === '/report') {
+    if (!linked) return notLinked();
+    const txt = await reportText(getAddress(linked[0]));
+    return tgSend(chat, txt || 'Save something first. Your first report shows up right after.', openApp('/reports', 'Full report'));
+  }
+  if (cmd === '/stop') {
+    if (!linked) return tgSend(chat, 'Alerts are already off.');
+    delete state.telegram[linked[0]]; persist();
+    return tgSend(chat, 'Alerts are off. Link again any time from the MezGuard app.', openApp());
+  }
+  return tgSend(chat, `I understand these commands:\n${HELP}`);
+}
+async function setupBot() {
+  if (!TG_TOKEN || !APP_URL) return; // only the public server owns the webhook (never a local test run)
+  try {
+    const w = await tgApi('setWebhook', { url: `${APP_URL}/api/telegram/webhook`, secret_token: TG_SECRET, allowed_updates: ['message'], drop_pending_updates: true });
+    await tgApi('setMyCommands', { commands: [
+      { command: 'status', description: 'Live Guard check of MUSD and the vault' },
+      { command: 'savings', description: 'Your savings right now' },
+      { command: 'report', description: 'Your week in one message' },
+      { command: 'stop', description: 'Turn alerts off' },
+    ] });
+    await tgApi('setMyDescription', { description: "MezGuard watches your dollar savings on Mezo: MUSD price, the savings vault, the network and the bridge. It messages you only when something needs your attention. Tap Start, then link your wallet in the app." });
+    console.log('telegram bot:', w.ok ? 'webhook set' : w.description);
+  } catch (e) { console.error('telegram bot setup', e.message); }
 }
 function explain(g) {
   if (g.peg.status !== 'ok') return `MUSD is trading at $${g.peg.price?.toFixed(3)}.`;
@@ -363,6 +427,12 @@ const routes = {
     tgSend(tg.id, '🛡 <b>MezGuard</b>\nAlerts are on. We will message you only when something about your savings needs your attention.');
     return { linked: true, name: state.telegram[owner.toLowerCase()].name };
   },
+  // Telegram calls this for every message to @Mezguardbot. Only Telegram knows the secret header.
+  'POST /api/telegram/webhook': async (_q, b, req) => {
+    if (!TG_SECRET || req.headers['x-telegram-bot-api-secret-token'] !== TG_SECRET) throw httpErr(401, 'no');
+    if (b?.message) onBotMessage(b.message).catch((e) => console.error('bot', e.shortMessage || e.message));
+    return { ok: true }; // answer at once; the reply goes out separately
+  },
   'POST /api/telegram/unlink': async (_q, b) => {
     const owner = ownerFrom(b.owner);
     await checkSigned(owner, 'unlink telegram', b.ts, b.signature);
@@ -409,6 +479,7 @@ server.listen(PORT, () => {
   console.log(`MezGuard on http://localhost:${PORT}  keeper ${keeper?.address || 'NOT SET'}`);
   tick();
   setInterval(tick, 60_000);
+  setupBot();
   warm();
   setInterval(warm, 25_000);
 });
