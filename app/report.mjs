@@ -35,10 +35,11 @@ async function accountLogs(account) {
   for (let i = 0; i < ranges.length; i += 4) { // 4 queries at a time, to be gentle with the public RPC
     parts.push(...(await Promise.all(ranges.slice(i, i + 4).map(([fromBlock, toBlock]) => testnet.getLogs({ address: account, events: ACCOUNT_EVENTS, fromBlock, toBlock })))));
   }
-  // Re-scan the last few blocks next time (load-balanced nodes can lag), de-duplicating by tx + log index.
+  // Re-scan the last ~300 blocks next time: load-balanced nodes can report a new head before they serve
+  // its logs, which made a just-made save vanish from reports. De-duplicate by tx + log index.
   const seen = new Set(prev.logs.map((l) => l.transactionHash + l.logIndex));
   const fresh = parts.flat().filter((l) => !seen.has(l.transactionHash + l.logIndex));
-  const next = { to: head > 5n ? head - 5n : head, logs: prev.logs.concat(fresh) };
+  const next = { to: head > 300n ? head - 300n : head, logs: prev.logs.concat(fresh) };
   scanned.set(key, next);
   return next.logs;
 }
