@@ -40,8 +40,9 @@ export const forgetMain = (owner) => { for (const k of caches.keys()) if (k.incl
 async function logs(kind, owner) {
   const u = `${API}?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${MAINNET.vault}&topic0=${TOPIC[kind]}&topic1=${pad(owner.toLowerCase())}&topic0_1_opr=and`;
   const j = await fetch(u, { signal: AbortSignal.timeout(15000) }).then((r) => r.json());
-  if (j.status !== '1' && !/No records/i.test(j.message || '')) throw new Error('Explorer: ' + (j.message || 'no answer'));
-  return (j.result || []).map((l) => ({ kind, amount: n(l.data), at: Number(l.timeStamp) * 1000, tx: l.transactionHash, block: Number(l.blockNumber) }));
+  // A wallet that never used the vault gets "No logs found" / "No records found": that is an empty history, not an error.
+  if (j.status !== '1' && !/no (records|logs)/i.test(j.message || '')) throw new Error('Explorer: ' + (j.message || 'no answer'));
+  return (Array.isArray(j.result) ? j.result : []).map((l) => ({ kind, amount: n(l.data), at: Number(l.timeStamp) * 1000, tx: l.transactionHash, block: Number(l.blockNumber) }));
 }
 
 /** A saver's whole history in Mezo's vault, oldest first, in plain words. */
@@ -62,7 +63,7 @@ export function account(owner) {
     const r = (address, abi, functionName, args) => mezo.readContract({ address, abi, functionName, args });
     const [inVault, claimable, wMusd, wBtc, allowance, h, staked, mezoEarned] = await Promise.all([
       r(MAINNET.vault, vaultAbi, 'balanceOf', [owner]), r(MAINNET.vault, vaultAbi, 'claimableYield', [owner]),
-      r(MAINNET.musd, erc20, 'balanceOf', [owner]), mezo.getBalance({ address: owner }), r(MAINNET.musd, erc20, 'allowance', [owner, MAINNET.vault]), history(owner),
+      r(MAINNET.musd, erc20, 'balanceOf', [owner]), mezo.getBalance({ address: owner }), r(MAINNET.musd, erc20, 'allowance', [owner, MAINNET.vault]), history(owner).catch(() => []), // explorer down: still show balances
       r(MAINNET.gauge, gaugeAbi, 'balanceOf', [owner]).catch(() => 0n), r(MAINNET.gauge, gaugeAbi, 'earned', [owner]).catch(() => 0n),
     ]);
     // Many savers stake their sMUSD in Mezo's gauge for extra MEZO rewards: it is still their savings.
@@ -107,7 +108,7 @@ export function report(owner, period = 'week') {
   return cached(`rep:${owner.toLowerCase()}:${period}`, 30_000, async () => {
     const days = period === 'month' ? 30 : 7, now = Date.now(), since = now - days * 86_400_000;
     const [a, h, rateNow, rateThen, live, savers] = await Promise.all([
-      account(owner), history(owner), ngnRate(), ngnAgo(days), vaultHealth().catch(() => null), quick(vaultSavers().catch(() => []), 2000, []),
+      account(owner), history(owner).catch(() => []), ngnRate(), ngnAgo(days), vaultHealth().catch(() => null), quick(vaultSavers().catch(() => []), 2000, []),
     ]);
     const inPeriod = h.filter((e) => e.at >= since);
     const earned = inPeriod.filter((e) => e.kind === 'interest').reduce((s, e) => s + e.amount, 0) + a.claimable;
