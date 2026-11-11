@@ -9,7 +9,9 @@ const FILE = fileURLToPath(new URL('./data/state.json', import.meta.url));
 
 function upstashConfig() {
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) return { url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN };
-  for (const f of [fileURLToPath(new URL('../secrets/upstash.json', import.meta.url)), '/etc/secrets/upstash.json']) {
+  // On the host: /etc/secrets. A local copy is used only when asked (USE_UPSTASH=1), so local tests never overwrite live state.
+  const files = ['/etc/secrets/upstash.json', ...(process.env.USE_UPSTASH ? [fileURLToPath(new URL('../secrets/upstash.json', import.meta.url))] : [])];
+  for (const f of files) {
     if (existsSync(f)) { const j = JSON.parse(readFileSync(f, 'utf8')); if (String(j.url || '').startsWith('https://') && j.token && !String(j.token).includes('PASTE')) return { url: j.url.replace(/\/$/, ''), token: j.token }; }
   }
   return null;

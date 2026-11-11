@@ -74,3 +74,7 @@ p{margin:6px 0}
 .net-main{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 40%,var(--line))}
 .net-test{color:var(--watch);border-color:color-mix(in srgb,var(--watch) 40%,var(--line))}
 .row>.chip{flex:none}
+/* Small phones: header chips must never push the page wider than the screen. */
+.top{gap:8px}.top .brand{flex:none}.top .row{min-width:0}.top .row>#wallet{flex:0 1 auto;min-width:0}
+@media (max-width:400px){.top{padding:10px 12px}.chip{padding:7px 10px;font-size:13px}.brand{font-size:16px}}
+@media (max-width:340px){.brand{font-size:0;gap:0}}

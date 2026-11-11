@@ -112,7 +112,9 @@ export async function whales() {
       for (const l of logs) {
         const musdIn = Number(formatUnits(l.args.amount1, 18));
         if (musdIn < 5000) continue; // positive amount1 = MUSD sold into the pool
-        moves.push({ where: 'Base MUSD/USDC pool', kind: 'sell', amount: musdIn, who: l.args.recipient, label: label(l.args.recipient), block: Number(l.blockNumber), tx: 'https://basescan.org/tx/' + l.transactionHash,
+        // Base makes a block every 2 seconds: estimate the time instead of one RPC call per swap.
+        const at = new Date(Date.now() - Number(to - l.blockNumber) * 2000).toISOString();
+        moves.push({ where: 'Base MUSD/USDC pool', kind: 'sell', amount: musdIn, who: l.args.recipient, label: label(l.args.recipient), at, block: Number(l.blockNumber), tx: 'https://basescan.org/tx/' + l.transactionHash,
           meaning: 'Someone sold a lot of MUSD for USDC. Several of these in a row can push MUSD below $1; the Guard watches the price.' });
       }
     } catch { /* optional */ }
@@ -127,7 +129,7 @@ export async function whales() {
       const nowV = Number(formatUnits(a, 18)), dayV = Number(formatUnits(b, 18));
       stability = { total: nowV, change24h: dayV ? (nowV - dayV) / dayV * 100 : 0 };
     } catch { /* optional */ }
-    moves.sort((x, y) => String(y.at || y.block).localeCompare(String(x.at || x.block)));
+    moves.sort((x, y) => new Date(y.at || 0) - new Date(x.at || 0)); // newest first, across both chains
     return { moves: moves.slice(0, 20), stability, at: Date.now() };
   });
 }

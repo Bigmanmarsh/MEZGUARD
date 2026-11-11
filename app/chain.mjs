@@ -1,6 +1,6 @@
 // Chain access for MezGuard: Mezo testnet (live app), Mezo mainnet + Base (Guard data, read-only).
 import { readFileSync, existsSync } from 'node:fs';
-import { createPublicClient, createWalletClient, http, parseAbi, parseAbiItem } from 'viem';
+import { createPublicClient, createWalletClient, http, fallback, parseAbi, parseAbiItem } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const root = new URL('..', import.meta.url);
@@ -9,8 +9,10 @@ export const DEPLOY = JSON.parse(readFileSync(new URL('deployments/mezoTestnet.j
 export const mezoTestnet = { id: 31611, name: 'Mezo Testnet', nativeCurrency: { name: 'Bitcoin', symbol: 'BTC', decimals: 18 }, rpcUrls: { default: { http: [process.env.MEZO_TESTNET_RPC || 'https://rpc.test.mezo.org'] } }, blockExplorers: { default: { name: 'Mezo Explorer', url: 'https://explorer.test.mezo.org' } } };
 const t = (url) => http(url, { timeout: 15000, retryCount: 2 });
 export const testnet = createPublicClient({ chain: mezoTestnet, transport: t(mezoTestnet.rpcUrls.default.http[0]) });
-export const mezo = createPublicClient({ transport: t(process.env.MEZO_RPC || 'https://mezo.drpc.org') });
-export const base = createPublicClient({ transport: t(process.env.BASE_RPC || 'https://mainnet.base.org') });
+// Public RPC nodes sometimes refuse calls or rate-limit: fall back to a second provider automatically.
+const many = (env, urls) => fallback((env ? [env, ...urls] : urls).map(t));
+export const mezo = createPublicClient({ transport: many(process.env.MEZO_RPC, ['https://mezo.drpc.org', 'https://rpc-http.mezo.boar.network']) });
+export const base = createPublicClient({ transport: many(process.env.BASE_RPC, ['https://mainnet.base.org', 'https://base-rpc.publicnode.com']) });
 
 function loadKey() {
   if (process.env.KEEPER_KEY) return process.env.KEEPER_KEY;

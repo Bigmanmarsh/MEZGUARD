@@ -21,6 +21,7 @@ const TOPIC = {
   YieldClaimed: toEventSelector('YieldClaimed(address,uint256)'),
 };
 const n = (x) => Number(formatEther(BigInt(x ?? 0)));
+const money = (v, d = 2) => v > 0 && v < 10 ** -d ? `under $${(10 ** -d).toFixed(d)}` : '$' + v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 const caches = new Map();
 // Shared in-flight requests; an expired entry is served while a fresh one loads (stale-while-revalidate).
@@ -51,7 +52,7 @@ export function history(owner) {
       ...e,
       kind: e.kind === 'Deposit' ? 'save' : e.kind === 'Withdraw' ? 'withdraw' : 'interest',
       interest: e.kind === 'YieldClaimed' ? e.amount : undefined,
-      text: e.kind === 'Deposit' ? `Saved $${e.amount.toFixed(2)}` : e.kind === 'Withdraw' ? `Took out $${e.amount.toFixed(2)}` : `Collected $${e.amount.toFixed(4)} interest`,
+      text: e.kind === 'Deposit' ? `Saved ${money(e.amount)}` : e.kind === 'Withdraw' ? `Took out ${money(e.amount)}` : `Collected ${money(e.amount, 4)} interest`,
     }));
   });
 }
@@ -119,9 +120,11 @@ export function report(owner, period = 'week') {
     const beat = others.length ? Math.round((others.filter((s) => s.score < myScore).length / others.length) * 100) : null;
     const naira = rateNow ? { rateNow, rateThen, balanceNgn: balance * rateNow, earnedNgn: earned * rateNow,
       nairaHolderLossUsd: rateThen && rateNow > rateThen ? balance - balance * (rateThen / rateNow) : 0 } : null;
+    // sMUSD staked in Mezo's gauge earns MEZO tokens instead of MUSD interest: say so, or a big saver's tiny MUSD number looks wrong.
+    const stakedNote = a.staked > 0.01 ? ` ${money(a.staked)} of your savings is staked in Mezo's gauge, which pays MEZO rewards instead (${a.mezoRewards.toLocaleString('en-US', { maximumFractionDigits: 2 })} MEZO so far).` : '';
     const sentence = earned > 0
-      ? `This ${period} your savings earned $${earned.toFixed(4)}. In plain USDC that money would have earned $0.`
-      : balance > 0 ? `Your $${balance.toFixed(2)} is earning about ${apr ? apr.toFixed(2) : '5'}% a year in Mezo's vault. Interest builds up every time Mezo pays the vault.`
+      ? `This ${period} your savings earned ${money(earned, 4)} in MUSD interest. In plain USDC that money would have earned $0.${stakedNote}`
+      : balance > 0 ? `Your ${money(balance)} is earning about ${apr ? apr.toFixed(2) : '5'}% a year in Mezo's vault. Interest builds up every time Mezo pays the vault.${stakedNote}`
         : h.some((e) => e.kind === 'save') ? 'Your savings are back in your wallet right now. Save again any time to keep earning.'
           : 'You have nothing saved yet. Save any amount to start earning.';
     return {
@@ -147,5 +150,10 @@ export async function verifyTx(owner, hash) {
 }
 
 export async function vaultBalances(owners) {
-  return Promise.all(owners.map((o) => mezo.readContract({ address: MAINNET.vault, abi: vaultAbi, functionName: 'balanceOf', args: [o] }).then(n).catch(() => 0)));
+  // Savings = sMUSD in the wallet + sMUSD staked in Mezo's gauge (same as the Home screen shows).
+  const one = (o) => Promise.all([
+    mezo.readContract({ address: MAINNET.vault, abi: vaultAbi, functionName: 'balanceOf', args: [o] }).catch(() => 0n),
+    mezo.readContract({ address: MAINNET.gauge, abi: gaugeAbi, functionName: 'balanceOf', args: [o] }).catch(() => 0n),
+  ]).then(([a, b]) => n(a + b));
+  return Promise.all(owners.map(one));
 }

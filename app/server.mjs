@@ -71,7 +71,7 @@ async function accountInfo(ownerRaw) {
   const [live, walletMusd, walletBtc, permitNonce] = await Promise.all([
     exists(account), read(DEPLOY.musd, ABI.erc20, 'balanceOf', [owner]), testnet.getBalance({ address: owner }), read(DEPLOY.musd, permitAbi, 'nonces', [owner]),
   ]);
-  const out = { owner, account, exists: live, permitNonce: Number(permitNonce), wallet: { musd: Number(formatEther(walletMusd)), btc: Number(formatEther(walletBtc)) },
+  const out = { owner, account, exists: live, permitNonce: Number(permitNonce), wallet: { musd: Number(formatEther(walletMusd)), musdWei: walletMusd.toString(), btc: Number(formatEther(walletBtc)) },
     explorer: `${EXPLORER}/address/${account}`, dripped: !!state.drips[owner.toLowerCase()], telegram: !!state.telegram[owner.toLowerCase()] };
   if (!live) return { ...out, saved: 0, idle: 0, claimable: 0, principal: 0, guardEnabled: true, nonce: 0, interestPaid: 0, feesPaid: 0, history: [] };
   const [[saved, idle, claimable], principal, guardEnabled, nonce, ip, fp, h] = await Promise.all([
@@ -91,14 +91,16 @@ async function ensureAccount(owner) {
 
 // ---------- signed requests: the wallet owner proves it is them, the server never holds their keys ----------
 async function checkSigned(owner, action, ts, signature) {
-  if (!ts || Math.abs(Date.now() - Number(ts)) > 10 * 60_000) throw httpErr(400, 'Request expired, try again');
-  const ok = await verifyMessage({ address: owner, message: `MezGuard: ${action} ${ts}`, signature });
+  if (!/^\d{13}$/.test(String(ts ?? '')) || Math.abs(Date.now() - Number(ts)) > 10 * 60_000) throw httpErr(400, 'Request expired, try again');
+  if (typeof signature !== 'string' || !/^0x[0-9a-fA-F]+$/.test(signature)) throw httpErr(400, 'Signature missing or invalid');
+  const ok = await verifyMessage({ address: owner, message: `MezGuard: ${action} ${ts}`, signature }).catch(() => false);
   if (!ok) throw httpErr(401, 'Signature does not match this wallet');
 }
 
 // ---------- Telegram ----------
 function checkTelegram(data) {
   if (!TG_TOKEN) throw httpErr(400, 'Telegram is not set up on this server yet');
+  if (!data || typeof data !== 'object' || typeof data.hash !== 'string' || !data.id) throw httpErr(400, 'Telegram login data missing');
   const { hash, ...rest } = data;
   const check = Object.keys(rest).sort().map((k) => `${k}=${rest[k]}`).join('\n');
   const secret = createHash('sha256').update(TG_TOKEN).digest();
@@ -155,6 +157,29 @@ async function tick() {
     }
     persist();
   } catch (e) { console.error('tick', e.shortMessage || e.message); }
+  weeklyReports().catch((e) => console.error('weekly', e.message));
+}
+// Weekly report on Telegram: once a week (Monday from 08:00 UTC), one short message per linked saver.
+const weekKey = (d = new Date()) => { const m = new Date(d); m.setUTCDate(m.getUTCDate() - ((m.getUTCDay() + 6) % 7)); return m.toISOString().slice(0, 10); };
+async function weeklyReports() {
+  const now = new Date();
+  if (!TG_TOKEN || now.getUTCDay() !== 1 || now.getUTCHours() < 8 || state.weeklySent === weekKey(now)) return;
+  state.weeklySent = weekKey(now); persist();
+  for (const [owner, t] of Object.entries(state.telegram)) {
+    try {
+      const o = getAddress(owner);
+      const main = await M.account(o);
+      let r = null, where = "Mezo's savings vault";
+      if (main.saved > 0 || main.history.length) r = await M.report(o, 'week');
+      else {
+        const acc = await accountOf(o);
+        if (await exists(acc)) { r = await report(acc, 'week'); where = 'your MezGuard test account'; }
+      }
+      if (!r) continue;
+      const earned = r.big.usd > 0.00005 ? r.big.usd : r.projected?.period || 0;
+      tgSend(t.id, `🛡 <b>Your MezGuard week</b>\nSaved: <b>$${r.balance.toFixed(2)}</b> in ${where}\nEarned: <b>$${earned.toFixed(4)}</b>${r.naira ? ` (₦${(earned * r.naira.rateNow).toFixed(2)})` : ''}\nPlain USDC would have earned $0.\n${r.rank.beatPercent != null ? `Your saving habits beat ${r.rank.beatPercent}% of savers.` : ''}\nhttps://mezguard.onrender.com/reports`);
+    } catch { /* one saver's report failing never stops the others */ }
+  }
 }
 function explain(g) {
   if (g.peg.status !== 'ok') return `MUSD is trading at $${g.peg.price?.toFixed(3)}.`;
@@ -172,7 +197,15 @@ async function body(req) {
   for await (const c of req) { s += c; if (s.length > 20_000) throw httpErr(413, 'Too big'); }
   try { return JSON.parse(s || '{}'); } catch { throw httpErr(400, 'Bad JSON'); }
 }
-function ownerFrom(v) { if (!v || !isAddress(v)) throw httpErr(400, 'Wallet address missing or invalid'); return getAddress(v); }
+function ownerFrom(v) { if (!v || typeof v !== 'string' || !isAddress(v)) throw httpErr(400, 'Wallet address missing or invalid'); return getAddress(v); }
+function amountFrom(v) {
+  if (!/^\d{1,15}(\.\d{1,18})?$/.test(String(v ?? '').trim())) throw httpErr(400, 'Enter a valid amount');
+  const a = parseEther(String(v).trim());
+  if (a <= 0n) throw httpErr(400, 'Enter an amount');
+  return a;
+}
+function deadlineFrom(v) { if (!/^\d{1,12}$/.test(String(v ?? ''))) throw httpErr(400, 'Signature deadline missing'); return BigInt(v); }
+function sigFrom(v) { if (!/^0x[0-9a-fA-F]{130}$/.test(String(v ?? ''))) throw httpErr(400, 'Signature missing or invalid'); return v; }
 const ipHits = new Map();
 function limit(req, key, max, windowMs) {
   const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress;
@@ -205,7 +238,7 @@ const routes = {
       main: MAINNET }; // mainnet direct mode: savers use Mezo's official vault from their own wallet
   }),
   // ---------- Mezo mainnet, direct mode ----------
-  'GET /api/main/account': async (q) => { const o = ownerFrom(q.get('owner')); return { ...(await M.account(o)), telegram: !!state.telegram[o.toLowerCase()] }; },
+  'GET /api/main/account': async (q, _b, req) => { const o = ownerFrom(q.get('owner')); if (req) limit(req, 'mainacct', 240, 600_000); if (q.get('fresh')) M.forgetMain(o); return { ...(await M.account(o)), telegram: !!state.telegram[o.toLowerCase()] }; },
   'GET /api/main/report': async (q) => M.report(ownerFrom(q.get('owner')), q.get('period') === 'month' ? 'month' : 'week'),
   // The app reports each mainnet transaction a saver makes; we check it on-chain before counting it.
   'POST /api/main/tx': async (_q, b, req) => {
@@ -221,8 +254,14 @@ const routes = {
     persist(); M.forgetMain(owner); memoStore.delete('proof');
     return { counted: true, kind: tx.kind };
   },
-  'GET /api/account': async (q) => { const o = ownerFrom(q.get('owner')); return memo('acct:' + o, 4_000, () => accountInfo(o)); },
-  'GET /api/guard': async () => lastGuard && Date.now() - lastGuard.at < 90_000 ? lastGuard : (lastGuard = await guardStatus()),
+  // fresh=1 right after the saver's own transaction: skip the short cache so the screen shows what just happened.
+  'GET /api/account': async (q) => {
+    const o = ownerFrom(q.get('owner'));
+    if (q.get('fresh')) { memoStore.delete('acct:' + o); forgetHistory(await accountOf(o)); }
+    return memo('acct:' + o, 4_000, () => accountInfo(o));
+  },
+  // Re-check at once if any source was still unknown (e.g. right after a restart); each source has its own cache.
+  'GET /api/guard': async () => lastGuard && lastGuard.overall !== 'unknown' && Date.now() - lastGuard.at < 90_000 ? lastGuard : (lastGuard = await guardStatus()),
   'GET /api/whales': async () => whales(),
   'GET /api/report': async (q) => {
     const owner = ownerFrom(q.get('owner'));
@@ -272,21 +311,27 @@ const routes = {
   'POST /api/save': async (_q, b, req) => {
     const owner = ownerFrom(b.owner);
     limit(req, 'save', 20, 600_000);
-    const amount = parseEther(String(b.amount));
-    if (amount <= 0n) throw httpErr(400, 'Enter an amount');
+    const amount = amountFrom(b.amount), deadline = deadlineFrom(b.deadline);
+    const { v, r, s } = parseSignature(sigFrom(b.signature));
+    const have = await read(DEPLOY.musd, ABI.erc20, 'balanceOf', [owner]);
+    if (have < amount) throw httpErr(400, `You only have $${Number(formatEther(have)).toFixed(2)} MUSD in your wallet`);
     const account = await ensureAccount(owner);
-    const { v, r, s } = parseSignature(b.signature);
-    await keeperTx('permit', { address: DEPLOY.musd, abi: permitAbi, functionName: 'permit', args: [owner, keeper.address, amount, BigInt(b.deadline), Number(v ?? 27n), r, s] });
-    await keeperTx('save', { address: DEPLOY.musd, abi: permitAbi, functionName: 'transferFrom', args: [owner, account, amount] });
-    const hash = await keeperTx('sweep', { address: account, abi: ABI.account, functionName: 'sweep' });
+    await keeperTx('permit', { address: DEPLOY.musd, abi: permitAbi, functionName: 'permit', args: [owner, keeper.address, amount, deadline, Number(v ?? 27n), r, s] });
+    const moved = await keeperTx('save', { address: DEPLOY.musd, abi: permitAbi, functionName: 'transferFrom', args: [owner, account, amount] });
+    // The keeper loop may already have swept it into the vault in between: then the save is done, not failed.
+    const idleNow = async () => (await read(account, ABI.account, 'balances'))[1];
+    const hash = (await idleNow()) === 0n ? moved
+      : await keeperTx('sweep', { address: account, abi: ABI.account, functionName: 'sweep' }).catch(async (e) => { if ((await idleNow()) === 0n) return moved; throw e; });
     return { hash, explorer: `${EXPLORER}/tx/${hash}` };
   },
-  'POST /api/sweep': async (_q, b) => {
+  'POST /api/sweep': async (_q, b, req) => {
     const owner = ownerFrom(b.owner);
+    limit(req, 'sweep', 10, 600_000);
     const account = await accountOf(owner);
+    if (!(await exists(account))) throw httpErr(404, 'No savings account yet');
     const [, idle] = await read(account, ABI.account, 'balances');
     if (idle === 0n) return { swept: 0 };
-    const hash = await keeperTx('sweep', { address: account, abi: ABI.account, functionName: 'sweep' });
+    const hash = await keeperTx('sweep', { address: account, abi: ABI.account, functionName: 'sweep' }).catch(async (e) => { if ((await read(account, ABI.account, 'balances'))[1] === 0n) return null; throw e; });
     return { swept: Number(formatEther(idle)), hash };
   },
   // Gasless withdraw: the owner signs typed data; the contract itself checks it and pays only the owner.
@@ -294,7 +339,8 @@ const routes = {
     const owner = ownerFrom(b.owner);
     limit(req, 'withdraw', 20, 600_000);
     const account = await accountOf(owner);
-    const hash = await keeperTx('withdrawWithSig', { address: account, abi: ABI.account, functionName: 'withdrawWithSig', args: [parseEther(String(b.amount)), BigInt(b.deadline), b.signature] });
+    const amount = amountFrom(b.amount), deadline = deadlineFrom(b.deadline), sig = sigFrom(b.signature);
+    const hash = await keeperTx('withdrawWithSig', { address: account, abi: ABI.account, functionName: 'withdrawWithSig', args: [amount, deadline, sig] });
     return { hash, explorer: `${EXPLORER}/tx/${hash}` };
   },
   // "Test my Guard": the owner asks for a real Guard exit on their own account, to see it work.
@@ -339,9 +385,13 @@ async function serveStatic(res, path) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try { url = new URL(req.url, 'http://x'); } catch { return json(res, 400, { error: 'Bad address' }); }
   const handler = routes[`${req.method} ${url.pathname}`];
-  if (!handler) return url.pathname.startsWith('/api/') ? json(res, 404, { error: 'Unknown API' }) : serveStatic(res, url.pathname);
+  if (!handler) {
+    if (url.pathname.startsWith('/api/')) return json(res, 404, { error: 'Unknown API' });
+    return serveStatic(res, url.pathname).catch(() => { if (!res.headersSent) json(res, 400, { error: 'Bad address' }); });
+  }
   try {
     const b = req.method === 'POST' ? await body(req) : null;
     json(res, 200, await handler(url.searchParams, b, req));
@@ -352,6 +402,9 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Never let one bad request or a flaky RPC take the whole site down.
+process.on('unhandledRejection', (e) => console.error('unhandled', e?.shortMessage || e?.message || e));
+process.on('uncaughtException', (e) => console.error('uncaught', e?.shortMessage || e?.message || e));
 server.listen(PORT, () => {
   console.log(`MezGuard on http://localhost:${PORT}  keeper ${keeper?.address || 'NOT SET'}`);
   tick();

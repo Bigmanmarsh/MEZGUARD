@@ -23,7 +23,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const usd = (n, d) => { n = Number(n || 0); d ??= Math.abs(n) > 0 && Math.abs(n) < 1 ? 4 : 2; return '$' + n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); };
 const ngn = (n) => (n == null ? '' : '₦' + (Math.abs(n) < 100 ? n.toFixed(2) : Math.round(n).toLocaleString('en-NG')));
 const short = (a) => (a ? a.slice(0, 6) + '…' + a.slice(-4) : '');
-const ago = (t) => { const s = Math.max(1, (Date.now() - new Date(t).getTime()) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; };
+const ago = (t) => { const s = Math.max(1, (Date.now() - new Date(t).getTime()) / 1000); return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : s < 129600 ? '1 day ago' : Math.round(s / 86400) + ' days ago'; };
 const STATUS = { ok: 'All good', watch: 'Keep an eye', act: 'Danger', unknown: 'Checking…' };
 function toWei(str) {
   const [i, f = ''] = String(str).trim().split('.');
@@ -44,6 +44,7 @@ const eth = () => window.ethereum;
 async function connect() {
   if (!eth()) { sheet(`<h2>You need a wallet</h2><p class="muted">Install MetaMask (or any EVM wallet) on your phone or browser, then come back and tap Connect.</p><p class="small muted">No wallet yet? You can still look around a live example account.</p><div class="row" style="margin-top:14px"><a class="btn" href="https://metamask.io/download/" target="_blank" rel="noopener">Get MetaMask</a><button class="btn ghost" data-act="example">See example</button></div>`); return; }
   const [a] = await eth().request({ method: 'eth_requestAccounts' });
+  try { localStorage.removeItem('mg.off'); } catch {}
   await ensureChain();
   setOwner(a);
 }
@@ -61,7 +62,10 @@ async function ensureChain() {
 // Send a transaction from the user's own wallet and wait until Mezo includes it.
 async function sendTx(to, data) {
   await ensureChain();
-  const hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: S.owner, to, data }] });
+  // Mezo enforces a calldata gas floor and public nodes sometimes estimate low: give the wallet headroom.
+  const tx = { from: S.owner, to, data };
+  try { const est = BigInt(await eth().request({ method: 'eth_estimateGas', params: [tx] })); tx.gas = '0x' + (est * 15n / 10n + 20000n).toString(16); } catch { /* let the wallet estimate */ }
+  const hash = await eth().request({ method: 'eth_sendTransaction', params: [tx] });
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 1500));
     const rc = await eth().request({ method: 'eth_getTransactionReceipt', params: [hash] }).catch(() => null);
@@ -161,9 +165,13 @@ async function mainWithdraw(btn, wei, amount) {
   closeSheet(); toast(`${usd(amount, 2)} is back in your wallet, plus any interest.`); refresh();
 }
 async function doSave(btn) {
-  const v = $('#amt').value; const value = toWei(v);
+  let v = $('#amt').value, value = toWei(v);
   if (BigInt(value) === 0n) throw new Error('Enter an amount');
   if (isMain()) return mainSave(btn, v, value);
+  if (S.acct.wallet.musdWei && BigInt(value) > BigInt(S.acct.wallet.musdWei)) {
+    if (BigInt(S.acct.wallet.musdWei) === 0n) throw new Error('Your wallet has no test MUSD yet. Close this and tap "Send me 20 test MUSD".');
+    value = S.acct.wallet.musdWei; v = weiToStr(value); // "Use all" rounding: never ask for more than the wallet has
+  }
   const deadline = Math.floor(Date.now() / 1000) + 1800;
   const signature = await signTyped({
     types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }],
@@ -197,9 +205,9 @@ function weiToStr(wei) { const b = BigInt(wei); const i = b / 10n ** 18n, f = (b
 function confetti(link) { if (link) setTimeout(() => toast('Done on Mezo. Proof: ' + link.split('/tx/')[1].slice(0, 10) + '… (see Activity)', 5000), 4200); }
 
 // ---------- data ----------
-async function loadAcct() { if (!who()) return null; S.acct = await api((isMain() ? '/api/main/account?owner=' : '/api/account?owner=') + who()); return S.acct; }
+async function loadAcct(fresh) { if (!who()) return null; S.acct = await api((isMain() ? '/api/main/account?owner=' : '/api/account?owner=') + who() + (fresh ? '&fresh=1' : '')); return S.acct; }
 async function loadGuard() { S.guard = await api('/api/guard'); return S.guard; }
-function refresh(again = true) { loadAcct().then(() => route(true)).catch(() => {}); if (again) setTimeout(() => refresh(false), 5000); }
+function refresh(again = true) { loadAcct(again).then(() => route(true)).catch(() => {}); if (again) setTimeout(() => refresh(false), 5000); }
 const apr = () => (S.guard?.vault?.apr30d ? S.guard.vault.apr30d : 4.8);
 
 // ---------- views ----------
@@ -209,6 +217,8 @@ function guardPill(g) { const st = g?.overall || 'unknown'; return `<span class=
 async function home() {
   if (!who()) {
     const g = S.guard || await loadGuard().catch(() => null);
+    // The Guard may still be warming up on the server: fill in the live numbers as soon as they land.
+    if (!g?.vault?.apr30d || g.overall === 'unknown') setTimeout(() => loadGuard().then((x) => { if (x?.vault?.apr30d && !who() && location.pathname === '/') route(true); }).catch(() => {}), 4000);
     return `<h1>Your dollars, earning about ${apr().toFixed(1)}% a year. With a Guard watching.</h1>
     <p class="muted">Save in MUSD, the Bitcoin-backed dollar of Mezo. No exchange holds your money: it sits in a savings account only you control.</p>
     <div class="card"><ol class="steps">${isMain()
@@ -226,7 +236,7 @@ async function home() {
   const needsMoney = !ro && a.wallet.musd < 0.01 && a.saved === 0;
   return `<div class="card"><p class="label">Your savings</p><div class="big">${usd(a.saved, 2)}</div>
     <p class="ngn">${rate ? ngn(a.saved * rate) : ''}</p>
-    <p class="sub">${a.claimable > 0 ? `<b style="color:var(--brand)">+${usd(a.claimable)}</b> interest earned so far` : a.saved > 0 ? `Earning about ${apr().toFixed(1)}% a year` : 'Nothing saved yet'}</p>
+    <p class="sub">${a.claimable > 0 ? `<b style="color:var(--brand)">+${usd(a.claimable)}</b> interest earned so far` : a.saved > 0 ? (isMain() && a.staked >= a.saved * 0.99 ? 'Staked in Mezo\'s gauge, earning MEZO rewards' : `Earning about ${apr().toFixed(1)}% a year`) : a.history?.some((e) => e.kind === 'save') ? 'All back in your own wallet. Save again any time.' : 'Nothing saved yet'}</p>
     ${isMain() && a.staked > 0 ? `<p class="small muted">${usd(a.staked, 2)} of it is staked in Mezo's gauge for extra rewards: <b style="color:var(--brand)">${a.mezoRewards.toLocaleString('en-US', { maximumFractionDigits: 2 })} MEZO</b> earned so far.</p>` : ''}
     <div class="row" style="margin-top:16px"><button class="btn" data-act="save" ${ro ? 'disabled' : ''}>Save</button><button class="btn ghost" data-act="withdraw" ${ro || a.saved === 0 ? 'disabled' : ''}>Take out</button></div>
     ${ro ? '' : `<p class="small muted" style="margin-top:10px">In your wallet: ${usd(a.wallet.musd, 2)} MUSD${isMain() && a.claimable > 0.0001 ? ' · <a href="#" data-act="claim">Collect interest now</a>' : ''}</p>`}</div>
@@ -326,7 +336,8 @@ async function proof() {
   const link = (a) => `<a class="mono" href="${p.explorer}/address/${a}" target="_blank" rel="noopener">${a}</a>`;
   const m = p.main, mlink = (a) => `<a class="mono" href="${m.explorer}/address/${a}" target="_blank" rel="noopener">${a}</a>`;
   return `<h1>Proof</h1><p class="muted">Everything MezGuard says can be checked on-chain.</p>
-  <div class="card"><h2>Mezo mainnet</h2><div class="grid2"><div class="mini"><span class="small muted">Real savers using MezGuard</span><b>${m.users}</b></div><div class="mini"><span class="small muted">They have saved</span><b>${usd(m.totalSaved, 2)}</b></div></div>
+  <div class="card"><h2>Mezo mainnet</h2>${m.users ? `<div class="grid2"><div class="mini"><span class="small muted">Real savers using MezGuard</span><b>${m.users}</b></div><div class="mini"><span class="small muted">They have saved</span><b>${usd(m.totalSaved, 2)}</b></div></div>` : `<p class="small">Mainnet direct mode is live. Every save made through MezGuard is checked on-chain and counted here.</p>`}
+    ${g?.vault?.supply ? `<p class="small muted" style="margin-top:8px">The Guard watches the whole vault: ${usd(g.vault.supply, 0)} saved in it, earning ${g.vault.apr30d.toFixed(2)}% a year.</p>` : ''}
     <p class="small muted" style="margin-top:10px">Savers deposit straight into Mezo's official MUSD savings vault from their own wallet. MezGuard never holds the money.</p>
     <p class="small muted" style="margin-top:8px">Mezo's savings vault (sMUSD)</p>${mlink(m.vault)}<p class="small muted" style="margin-top:8px">MUSD</p>${mlink(m.musd)}
     <h2 style="margin-top:14px">Recent saver actions (checked on-chain)</h2>${m.txs.length ? `<ul class="list small">${m.txs.map((t) => `<li><div class="toggle"><span>${t.kind === 'save' ? 'Saved' : t.kind === 'withdraw' ? 'Took out' : 'Collected interest'} ${usd(t.amount, 2)}</span><a href="${m.explorer}/tx/${t.hash}" target="_blank" rel="noopener">${t.hash.slice(0, 10)}…</a></div><div class="when">${short(t.owner)} · ${ago(t.at)}</div></li>`).join('')}</ul>` : '<p class="muted small">The first real saves will show here.</p>'}</div>
@@ -363,7 +374,7 @@ document.addEventListener('click', (e) => {
   const run = {
     connect: () => connect().catch((x) => toast(x.message)),
     example: () => { closeSheet(); S.viewing = S.cfg.example; setNet('test', { keepViewing: true }); },
-    disconnect: () => { closeSheet(); S.owner = null; S.acct = null; try { localStorage.removeItem('mg.owner'); } catch {} renderWallet(); route(); },
+    disconnect: () => { closeSheet(); S.owner = null; S.acct = null; try { localStorage.removeItem('mg.owner'); localStorage.setItem('mg.off', '1'); } catch {} renderWallet(); route(); },
     save: saveSheet, withdraw: withdrawSheet,
     max: () => { $('#amt').value = b.dataset.v === 'all' ? 'all' : (isMain() && S.acct?.wallet.musdWei ? weiToStr(S.acct.wallet.musdWei) : b.dataset.v); },
     net: netSheet,
@@ -375,19 +386,18 @@ document.addEventListener('click', (e) => {
       const h = await vaultExit(b, S.acct.savedWei); await reportTx(h);
       toast('All your savings are back in your own wallet.'); refresh();
     }),
-    'do-save': () => busy(b, 'Check your wallet…', () => doSave(b)),
+    'do-save': () => busy(b, 'Check your wallet…', () => doSave(b).catch((x) => { loadAcct().catch(() => {}); throw x; })), // a half-done save (approved, not deposited) must not ask to approve again
     'do-withdraw': () => busy(b, 'Check your wallet…', () => doWithdraw(b)),
-    onboard: () => busy(b, 'Sending… (about 10 seconds)', async () => { const r = await api('/api/onboard', { owner: S.owner }); toast(r.gifts.length ? `Sent: ${r.gifts.join(' and ')}` : 'Your account is ready'); await loadAcct(); route(true); }),
-    drill: () => busy(b, 'Check your wallet…', async () => { const sig = await signAction('drill'); b.textContent = 'Guard is moving your savings…'; await api('/api/drill', { owner: S.owner, ...sig }); toast('Drill done: your savings are back in your wallet.'); await loadAcct(); route(true); }),
+    onboard: () => busy(b, 'Sending… (about 10 seconds)', async () => { const r = await api('/api/onboard', { owner: S.owner }); toast(r.gifts.length ? `Sent: ${r.gifts.join(' and ')}` : 'Your account is ready'); await loadAcct(true); route(true); }),
+    drill: () => busy(b, 'Check your wallet…', async () => { const sig = await signAction('drill'); b.textContent = 'Guard is moving your savings…'; await api('/api/drill', { owner: S.owner, ...sig }); toast('Drill done: your savings are back in your wallet.'); await loadAcct(true); route(true); }),
     'toggle-guard': () => busy(b, '', async () => {
       const on = b.getAttribute('aria-checked') !== 'true';
-      await ensureChain();
-      const hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: S.owner, to: S.acct.account, data: '0x64d44b1e' + (on ? '1' : '0').padStart(64, '0') }] });
       toast(on ? 'Turning auto-protect on…' : 'Turning auto-protect off…');
-      for (let i = 0; i < 20; i++) { await new Promise((r) => setTimeout(r, 1500)); const rc = await eth().request({ method: 'eth_getTransactionReceipt', params: [hash] }); if (rc) break; }
-      await loadAcct(); route(true);
+      await sendTx(S.acct.account, '0x64d44b1e' + (on ? '1' : '0').padStart(64, '0'));
+      toast(on ? 'Auto-protect is on.' : 'Auto-protect is off. You can turn it back on any time.');
+      await loadAcct(true); route(true);
     }),
-    'tg-unlink': () => busy(b, '…', async () => { const sig = await signAction('unlink telegram'); await api('/api/telegram/unlink', { owner: S.owner, ...sig }); await loadAcct(); route(true); }),
+    'tg-unlink': () => busy(b, '…', async () => { const sig = await signAction('unlink telegram'); await api('/api/telegram/unlink', { owner: S.owner, ...sig }); await loadAcct(true); route(true); }),
     period: () => { S.period = b.dataset.v; route(true); },
     retry: () => route(),
   }[act];
@@ -406,10 +416,11 @@ window.addEventListener('popstate', () => route());
   if (q.get('as')) S.viewing = q.get('as');
   else if (q.has('example')) { S.viewing = S.cfg.example; S.net = 'test'; }
   if (eth()) {
-    let saved = null; try { saved = localStorage.getItem('mg.owner'); } catch {}
+    let saved = null, off = false; try { saved = localStorage.getItem('mg.owner'); off = !!localStorage.getItem('mg.off'); } catch {}
     const accs = await eth().request({ method: 'eth_accounts' }).catch(() => []);
-    if (accs[0] && (!saved || saved.toLowerCase() === accs[0].toLowerCase())) { S.owner = accs[0]; S.viewing = null; }
-    eth().on?.('accountsChanged', (a) => (a[0] ? setOwner(a[0]) : (S.owner = null, renderWallet(), route())));
+    // Reconnect silently only if the saver did not press Disconnect last time.
+    if (accs[0] && !off && (!saved || saved.toLowerCase() === accs[0].toLowerCase())) { S.owner = accs[0]; S.viewing = null; }
+    eth().on?.('accountsChanged', (a) => { if (!S.owner) return; a[0] ? setOwner(a[0]) : (S.owner = null, S.acct = null, renderWallet(), route()); });
   }
   renderWallet(); route();
   loadGuard().catch(() => {});
