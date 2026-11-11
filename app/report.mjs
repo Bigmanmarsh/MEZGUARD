@@ -20,6 +20,29 @@ async function blockTime(n) {
 
 const n = (x) => Number(formatEther(x ?? 0n));
 
+// Mezo testnet RPC allows at most 10,000 blocks per log query: scan in chunks and remember
+// how far each account has been scanned, so later calls only fetch the new blocks.
+const SPAN = 9_999n;
+const ACCOUNT_EVENTS = Object.values(EVENTS).filter((e) => e.name !== 'AccountCreated');
+const scanned = new Map(); // account -> { to: bigint, logs: [] }
+async function accountLogs(account) {
+  const key = account.toLowerCase();
+  const prev = scanned.get(key) || { to: (await deployBlock()) - 1n, logs: [] };
+  const head = await testnet.getBlockNumber();
+  const ranges = [];
+  for (let f = prev.to + 1n; f <= head; f += SPAN + 1n) ranges.push([f, f + SPAN > head ? head : f + SPAN]);
+  const parts = [];
+  for (let i = 0; i < ranges.length; i += 4) { // 4 queries at a time, to be gentle with the public RPC
+    parts.push(...(await Promise.all(ranges.slice(i, i + 4).map(([fromBlock, toBlock]) => testnet.getLogs({ address: account, events: ACCOUNT_EVENTS, fromBlock, toBlock })))));
+  }
+  // Re-scan the last few blocks next time (load-balanced nodes can lag), de-duplicating by tx + log index.
+  const seen = new Set(prev.logs.map((l) => l.transactionHash + l.logIndex));
+  const fresh = parts.flat().filter((l) => !seen.has(l.transactionHash + l.logIndex));
+  const next = { to: head > 5n ? head - 5n : head, logs: prev.logs.concat(fresh) };
+  scanned.set(key, next);
+  return next.logs;
+}
+
 const histCache = new Map();
 /** Every event of one MezGuard account, oldest first, in plain words (cached 15 s). */
 export async function history(account) {
@@ -31,8 +54,7 @@ export async function history(account) {
 }
 export const forgetHistory = (account) => histCache.delete(account);
 async function loadHistory(account) {
-  const from = await deployBlock();
-  const logs = await testnet.getLogs({ address: account, events: Object.values(EVENTS).filter((e) => e.name !== 'AccountCreated'), fromBlock: from, toBlock: 'latest' });
+  const logs = await accountLogs(account);
   const out = [];
   const exitTxs = new Set(logs.filter((l) => l.eventName === 'GuardExit').map((l) => l.transactionHash));
   for (const l of logs) {
