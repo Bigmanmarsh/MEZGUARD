@@ -10,7 +10,7 @@ const FILE = fileURLToPath(new URL('./data/state.json', import.meta.url));
 function upstashConfig() {
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) return { url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN };
   for (const f of [fileURLToPath(new URL('../secrets/upstash.json', import.meta.url)), '/etc/secrets/upstash.json']) {
-    if (existsSync(f)) { const j = JSON.parse(readFileSync(f, 'utf8')); if (j.url && j.token) return { url: j.url.replace(/\/$/, ''), token: j.token }; }
+    if (existsSync(f)) { const j = JSON.parse(readFileSync(f, 'utf8')); if (String(j.url || '').startsWith('https://') && j.token && !String(j.token).includes('PASTE')) return { url: j.url.replace(/\/$/, ''), token: j.token }; }
   }
   return null;
 }
