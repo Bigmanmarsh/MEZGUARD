@@ -9,10 +9,10 @@ import { formatEther, parseEther, getAddress, encodeFunctionData, isAddress, ver
 import { testnet, keeper, keeperWallet, DEPLOY, ABI, mezoTestnet } from './chain.mjs';
 import { guardStatus, whales, ngnRate } from './guard.mjs';
 import { history, report, forgetHistory } from './report.mjs';
+import { loadState, saveState, storeKind } from './store.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const PUBLIC = fileURLToPath(new URL('./public/', import.meta.url));
-const STATE_FILE = fileURLToPath(new URL('./data/state.json', import.meta.url));
 const EXPLORER = 'https://explorer.test.mezo.org';
 // Telegram bot: env vars on the host, or secrets/telegram.json ({"token": "...", "bot": "BotUsername"}) locally. Never committed.
 const tgFile = [fileURLToPath(new URL('../secrets/telegram.json', import.meta.url)), '/etc/secrets/telegram.json'].find((f) => existsSync(f)) || '';
@@ -24,13 +24,13 @@ const DRIP_MUSD =parseEther(process.env.DRIP_MUSD || '20');
 const DRIP_BTC = parseEther('0.00001'); // enough test BTC for thousands of Mezo testnet transactions
 const permitAbi = parseAbi(['function permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)', 'function nonces(address) view returns (uint256)', 'function transferFrom(address,address,uint256) returns (bool)']);
 
-// ---------- tiny persistent state (drips, Telegram links, alert log) ----------
-let state = { drips: {}, telegram: {}, alerts: [], guardStreak: 0, keeperTxs: [] };
-try { if (existsSync(STATE_FILE)) state = { ...state, ...JSON.parse(readFileSync(STATE_FILE, 'utf8')) }; } catch { /* fresh */ }
+// ---------- durable state (Telegram links, faucet gifts, alert log, keeper txs): Upstash or local file ----------
+let state = { drips: {}, telegram: {}, alerts: [], guardStreak: 0, keeperTxs: [], ...(await loadState()) };
+console.log(`state: ${storeKind}, ${Object.keys(state.telegram).length} Telegram links, ${state.keeperTxs.length} keeper txs`);
 let saveTimer = null;
 function persist() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => { await mkdir(fileURLToPath(new URL('./data/', import.meta.url)), { recursive: true }); await writeFile(STATE_FILE, JSON.stringify(state, null, 1)); }, 300);
+  saveTimer = setTimeout(() => saveState(state), 1500);
 }
 
 // ---------- keeper transactions, one at a time so nonces never collide ----------
@@ -227,10 +227,15 @@ const routes = {
   'POST /api/onboard': async (_q, b, req) => {
     const owner = ownerFrom(b.owner);
     limit(req, 'onboard', 5, 3600_000);
-    const account = await ensureAccount(owner);
     const key = owner.toLowerCase();
+    // One gift per wallet, decided on-chain so a redeploy can never reopen it: only a brand-new
+    // account, or one that has never saved anything, can receive the test dollars.
+    const predicted = await accountOf(owner);
+    const isNew = !(await exists(predicted));
+    const account = await ensureAccount(owner);
+    const neverUsed = isNew || !(await history(account)).some((e) => e.kind === 'save');
     const gifts = [];
-    if (!state.drips[key] && !dripping.has(key)) {
+    if (!state.drips[key] && neverUsed && !dripping.has(key)) {
       dripping.add(key);
       try {
         await keeperTx('faucet MUSD', { address: DEPLOY.musd, abi: ABI.erc20, functionName: 'transfer', args: [owner, DRIP_MUSD] });
