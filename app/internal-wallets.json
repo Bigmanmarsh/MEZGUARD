@@ -1,0 +1,12 @@
+{
+  "note": "Wallets run by the MezGuard team (keeper example account, dev and demo-video test wallets). The Proof page never counts these as testers.",
+  "wallets": [
+    "0xCEA259b22B76c253581C789400F7347B37Aeec83",
+    "0x70bbB130269aaDfB11d48D5E6C8cB502aa01468a",
+    "0x7B55736C0789ED4feb22b6b059C2df54690C6A75",
+    "0xDDae2e13a2BcBaACAFa02bc73f49BC4461D892E6",
+    "0x0B1bd8660dceFe730EA6358F3d410898625B5141",
+    "0xB6ab382d285cBC305011463fd96B20E7cdDA723B",
+    "0x8387c906bc641d9c0eaadb021be4c6abc95d3f5a"
+  ]
+}

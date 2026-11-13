@@ -27,7 +27,10 @@ const DRIP_BTC = parseEther('0.00001'); // enough test BTC for thousands of Mezo
 const permitAbi = parseAbi(['function permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)', 'function nonces(address) view returns (uint256)', 'function transferFrom(address,address,uint256) returns (bool)']);
 
 // ---------- durable state (Telegram links, faucet gifts, alert log, keeper txs): Upstash or local file ----------
-let state = { drips: {}, telegram: {}, alerts: [], guardStreak: 0, keeperTxs: [], mainUsers: {}, mainTxs: [], ...(await loadState()) };
+let state = { drips: {}, telegram: {}, alerts: [], guardStreak: 0, keeperTxs: [], mainUsers: {}, mainTxs: [], feedback: [], ...(await loadState()) };
+// Team wallets (keeper, dev and demo wallets) are never counted as testers on the Proof page.
+const INTERNAL = new Set(JSON.parse(readFileSync(new URL('./internal-wallets.json', import.meta.url), 'utf8')).wallets.map((w) => w.toLowerCase()));
+const clean = (s, max) => String(s ?? '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 console.log(`state: ${storeKind}, ${Object.keys(state.telegram).length} Telegram links, ${state.keeperTxs.length} keeper txs`);
 let saveTimer = null;
 function persist() {
@@ -345,7 +348,20 @@ const routes = {
     const saved = await Promise.all(accounts.map((a) => read(DEPLOY.vault, ABI.vault, 'balanceOf', [a])));
     const users = Object.keys(state.mainUsers);
     const mainSaved = (await M.vaultBalances(users)).reduce((s, x) => s + x, 0);
-    return { main: { users: users.length, totalSaved: mainSaved, txs: state.mainTxs.slice(0, 15), vault: MAINNET.vault, musd: MAINNET.musd, explorer: MAINNET.explorer }, factory: DEPLOY.factory, implementation: DEPLOY.implementation, vault: DEPLOY.vault, musd: DEPLOY.musd, deployTx: DEPLOY.deployTx,
+    // Outside testers: wallets not run by the team, with at least one on-chain action (test network or mainnet).
+    const owners = await Promise.all(accounts.map((a) => read(a, ABI.account, 'owner').then((o) => o.toLowerCase()).catch(() => null)));
+    const tester = new Map(); // wallet -> on-chain actions
+    await Promise.all(accounts.map(async (acc, i) => {
+      const o = owners[i]; if (!o || INTERNAL.has(o)) return;
+      const n = (await history(acc).catch(() => [])).filter((e) => e.kind !== 'guard' || e.text !== 'Opened your savings account, Guard on').length;
+      tester.set(o, (tester.get(o) || 0) + n + 1); // +1: opening the account is itself an on-chain action
+    }));
+    for (const t of state.mainTxs) if (!INTERNAL.has(t.owner)) tester.set(t.owner, (tester.get(t.owner) || 0) + 1);
+    const fb = state.feedback.filter((f) => tester.has(f.owner)); // only wallets with a real on-chain action count
+    const testers = { wallets: tester.size, actions: [...tester.values()].reduce((s, x) => s + x, 0), feedback: fb.length,
+      rating: fb.length ? Math.round((fb.reduce((s, f) => s + f.rating, 0) / fb.length) * 10) / 10 : null,
+      quotes: fb.filter((f) => f.worked || f.broke).slice(0, 8).map((f) => ({ rating: f.rating, worked: f.worked, broke: f.broke, who: f.owner.slice(0, 6) + '…' + f.owner.slice(-4), at: f.at, net: f.net })) };
+    return { testers, main: { users: users.length, totalSaved: mainSaved, txs: state.mainTxs.slice(0, 15), vault: MAINNET.vault, musd: MAINNET.musd, explorer: MAINNET.explorer }, factory: DEPLOY.factory, implementation: DEPLOY.implementation, vault: DEPLOY.vault, musd: DEPLOY.musd, deployTx: DEPLOY.deployTx,
       accounts: accounts.length, totalSaved: saved.reduce((s, x) => s + Number(formatEther(x)), 0), keeperTxs: state.keeperTxs.slice(0, 15), explorer: EXPLORER };
   }),
   // Create the account, and give new testers 20 test MUSD plus a pinch of test BTC for gas. Once per wallet.
@@ -426,6 +442,19 @@ const routes = {
     persist();
     tgSend(tg.id, '🛡 <b>MezGuard</b>\nAlerts are on. We will message you only when something about your savings needs your attention.');
     return { linked: true, name: state.telegram[owner.toLowerCase()].name };
+  },
+  // Tester feedback, signed by the wallet so every entry is tied to a real wallet (shown on Proof).
+  'POST /api/feedback': async (_q, b, req) => {
+    const owner = ownerFrom(b.owner);
+    limit(req, 'feedback', 6, 3600_000);
+    await checkSigned(owner, 'feedback', b.ts, b.signature);
+    const rating = Number(b.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw httpErr(400, 'Pick 1 to 5 stars');
+    const entry = { owner: owner.toLowerCase(), rating, worked: clean(b.worked, 400), broke: clean(b.broke, 400), net: b.net === 'main' ? 'main' : 'test', page: clean(b.page, 20), at: Date.now() };
+    state.feedback = [entry, ...state.feedback.filter((f) => !(f.owner === entry.owner && Date.now() - f.at < 600_000))].slice(0, 300); // one entry per wallet per 10 min
+    persist(); memoStore.delete('proof');
+    if (TG_TOKEN) for (const [o, t] of Object.entries(state.telegram)) if (INTERNAL.has(o)) tgSend(t.id, `📝 <b>New feedback</b> ${'★'.repeat(rating)}\n${entry.worked ? 'Worked: ' + entry.worked + '\n' : ''}${entry.broke ? 'Broke: ' + entry.broke : ''}`);
+    return { ok: true };
   },
   // Telegram calls this for every message to @Mezguardbot. Only Telegram knows the secret header.
   'POST /api/telegram/webhook': async (_q, b, req) => {

@@ -126,6 +126,22 @@ function withdrawSheet() {
   <p class="small muted">Saved: ${usd(saved, 2)} · <a href="#" data-act="max" data-v="all">Take out all</a></p>
   <button class="btn" data-act="do-withdraw" style="margin-top:12px">Take out</button>`);
 }
+function feedbackSheet() {
+  if (!S.owner) { toast('Connect your wallet first, so your feedback counts as a real tester'); return; }
+  S.stars = 0;
+  sheet(`<h2>How was MezGuard?</h2><p class="muted small">Your wallet signs it (free, no fee) so we know it came from a real tester. Shown on the Proof page with your wallet shortened.</p>
+  <div class="stars" role="radiogroup" aria-label="Rating">${[1, 2, 3, 4, 5].map((n) => `<button type="button" role="radio" aria-checked="false" aria-label="${n} star${n > 1 ? 's' : ''}" data-act="star" data-v="${n}">★</button>`).join('')}</div>
+  <label class="small muted" for="fb-worked">What worked well?</label><textarea id="fb-worked" maxlength="400" rows="2" placeholder="e.g. saving took one tap"></textarea>
+  <label class="small muted" for="fb-broke">What broke or confused you?</label><textarea id="fb-broke" maxlength="400" rows="2" placeholder="e.g. I didn't get what the Guard does"></textarea>
+  <button class="btn" data-act="do-feedback" style="margin-top:12px">Send feedback</button>`);
+}
+async function sendFeedback() {
+  if (!S.stars) throw new Error('Tap 1 to 5 stars first');
+  const sig = await signAction('feedback');
+  await api('/api/feedback', { owner: S.owner, rating: S.stars, worked: $('#fb-worked').value, broke: $('#fb-broke').value, net: isMain() ? 'main' : 'test', page: location.pathname, ...sig });
+  closeSheet(); toast('Thank you! Your feedback is on the Proof page.');
+  try { localStorage.setItem('mg.fb', '1'); } catch {}
+}
 async function busy(btn, label, fn) {
   const old = btn.textContent; btn.disabled = true; btn.textContent = label;
   try { await fn(); } catch (e) { toast(e.code === 4001 ? 'You cancelled in your wallet' : e.message); } finally { btn.disabled = false; btn.textContent = old; }
@@ -211,7 +227,9 @@ function refresh(again = true) { loadAcct(again).then(() => route(true)).catch((
 const apr = () => (S.guard?.vault?.apr30d ? S.guard.vault.apr30d : 4.8);
 
 // ---------- views ----------
-const footer = () => `<p class="foot">${isMain() ? "Mezo mainnet · Mezo's official MUSD savings vault" : 'Free test network · real Mezo mainnet data in the Guard'} · <a href="/proof" data-link>Proof</a> · <a href="https://github.com/Bigmanmarsh/MEZGUARD" target="_blank" rel="noopener">Code</a></p>`;
+const footer = () => `<p class="foot">${isMain() ? "Mezo mainnet · Mezo's official MUSD savings vault" : 'Free test network · real Mezo mainnet data in the Guard'} · <a href="/proof" data-link>Proof</a> · <a href="https://github.com/Bigmanmarsh/MEZGUARD" target="_blank" rel="noopener">Code</a> · <a href="#" data-act="feedback">Give feedback</a></p>`;
+const fbGiven = () => { try { return !!localStorage.getItem('mg.fb'); } catch { return false; } };
+const feedbackCard = () => fbGiven() ? '' : `<div class="card"><div class="toggle"><div><h2>Testing MezGuard?</h2><p class="small muted">Tell us what worked and what broke. Takes 30 seconds, signed by your wallet, no fee.</p></div><button class="btn ghost small" data-act="feedback">Feedback</button></div></div>`;
 function guardPill(g) { const st = g?.overall || 'unknown'; return `<span class="pill s-${st}">${STATUS[st]}</span>`; }
 
 async function home() {
@@ -245,6 +263,7 @@ async function home() {
     ${needsMoney && !isMain() ? `<div class="card"><h2>Get test dollars</h2><p class="muted small">This is the Mezo test network, so the dollars are free test MUSD. We'll send you ${a.dripped ? 'nothing more (one gift per wallet)' : '20 test MUSD and a little test BTC for fees'}.</p>${a.dripped ? '' : '<button class="btn" data-act="onboard">Send me 20 test MUSD</button>'}</div>` : ''}
     <a class="card" href="/guard" data-link style="display:block;text-decoration:none;color:inherit"><div class="toggle"><div><p class="label">Guard</p><b>${isMain() ? 'Watching your savings' : a.guardEnabled ? 'Auto-protect is on' : 'Auto-protect is off'}</b><p class="small muted">${S.guard ? esc(headline(S.guard)) : 'Checking Mezo…'}</p></div>${guardPill(S.guard)}</div></a>
     ${ro ? '' : telegramCard()}
+    ${ro || !a.history?.length ? '' : feedbackCard()}
     <div class="card"><h2>Activity</h2>${activity(a.history)}<p class="small muted" style="margin-top:8px">${isMain() ? 'Your wallet on Mezo' : 'Your savings account'}: <a href="${esc(a.explorer)}" target="_blank" rel="noopener">${short(a.account)}</a></p></div>${footer()}`;
 }
 function activity(h) {
@@ -336,12 +355,20 @@ async function proof() {
   const [p, g] = await Promise.all([api('/api/proof'), S.guard || loadGuard().catch(() => null)]);
   const link = (a) => `<a class="mono" href="${p.explorer}/address/${a}" target="_blank" rel="noopener">${a}</a>`;
   const m = p.main, mlink = (a) => `<a class="mono" href="${m.explorer}/address/${a}" target="_blank" rel="noopener">${a}</a>`;
+  const t = p.testers;
+  const testersCard = t && !t.wallets ? `<div class="card"><h2>Outside testers</h2><p class="small muted">Wallets not run by the MezGuard team are counted here, with their on-chain actions and signed reviews. Be one of the first.</p><button class="btn ghost small" data-act="feedback" style="margin-top:10px">Tried it? Leave a review</button></div>` : t ? `<div class="card"><h2>Outside testers</h2><p class="small muted">Wallets not run by the MezGuard team. Every action is a real on-chain transaction; every review is signed by the tester's wallet.</p>
+    <div class="grid2" style="margin-top:10px"><div class="mini"><span class="small muted">Tester wallets</span><b>${t.wallets}</b></div><div class="mini"><span class="small muted">Their on-chain actions</span><b>${t.actions}</b></div></div>
+    ${t.feedback ? `<p style="margin-top:10px"><b>${t.rating} / 5</b> <span class="small muted">from ${t.feedback} signed review${t.feedback > 1 ? 's' : ''}</span></p>` : ''}
+    ${t.quotes.length ? `<ul class="list small">${t.quotes.map((q) => `<li><div><span style="color:var(--brand)">${'★'.repeat(q.rating)}</span>${q.worked ? ` “${esc(q.worked)}”` : ''}</div>${q.broke ? `<div class="muted">Fix: ${esc(q.broke)}</div>` : ''}<div class="when">${esc(q.who)} · ${q.net === 'main' ? 'mainnet' : 'test network'} · ${ago(q.at)}</div></li>`).join('')}</ul>` : ''}
+    <button class="btn ghost small" data-act="feedback" style="margin-top:10px">Tried it? Leave a review</button></div>` : '';
   return `<h1>Proof</h1><p class="muted">Everything MezGuard says can be checked on-chain.</p>
+  ${t?.wallets ? testersCard : ''}
   <div class="card"><h2>Mezo mainnet</h2>${m.users ? `<div class="grid2"><div class="mini"><span class="small muted">Real savers using MezGuard</span><b>${m.users}</b></div><div class="mini"><span class="small muted">They have saved</span><b>${usd(m.totalSaved, 2)}</b></div></div>` : `<p class="small">Mainnet direct mode is live. Every save made through MezGuard is checked on-chain and counted here.</p>`}
     ${g?.vault?.supply ? `<p class="small muted" style="margin-top:8px">The Guard watches the whole vault: ${usd(g.vault.supply, 0)} saved in it, earning ${g.vault.apr30d.toFixed(2)}% a year.</p>` : ''}
     <p class="small muted" style="margin-top:10px">Savers deposit straight into Mezo's official MUSD savings vault from their own wallet. MezGuard never holds the money.</p>
     <p class="small muted" style="margin-top:8px">Mezo's savings vault (sMUSD)</p>${mlink(m.vault)}<p class="small muted" style="margin-top:8px">MUSD</p>${mlink(m.musd)}
     <h2 style="margin-top:14px">Recent saver actions (checked on-chain)</h2>${m.txs.length ? `<ul class="list small">${m.txs.map((t) => `<li><div class="toggle"><span>${t.kind === 'save' ? 'Saved' : t.kind === 'withdraw' ? 'Took out' : 'Collected interest'} ${usd(t.amount, 2)}</span><a href="${m.explorer}/tx/${t.hash}" target="_blank" rel="noopener">${t.hash.slice(0, 10)}…</a></div><div class="when">${short(t.owner)} · ${ago(t.at)}</div></li>`).join('')}</ul>` : '<p class="muted small">The first real saves will show here.</p>'}</div>
+  ${t?.wallets ? '' : testersCard}
   <div class="grid2"><div class="mini"><span class="small muted">Test-network accounts</span><b>${p.accounts}</b></div><div class="mini"><span class="small muted">Saved in them</span><b>${usd(p.totalSaved, 2)}</b></div></div>
   <div class="card"><h2>MezGuard account contracts (test network)</h2><p class="small muted">The full version: gasless saving, automatic Guard exit, and the fee capped in code. Ready for mainnet with one deploy.</p><p class="small muted">Factory (verified)</p>${link(p.factory)}<p class="small muted" style="margin-top:8px">Account blueprint</p>${link(p.implementation)}<p class="small muted" style="margin-top:8px">Mezo's MUSD savings vault (sMUSD)</p>${link(p.vault)}<p class="small muted" style="margin-top:8px">MUSD</p>${link(p.musd)}</div>
   <div class="card"><h2>Who can move your money</h2><ul class="list small"><li><b>You</b>: save, take out, turn the Guard on or off.</li><li><b>The MezGuard keeper</b>: can only send your savings <b>to your own wallet</b> (Guard exit), and only while your Guard is on. It cannot send money anywhere else.</li><li><b>The admin</b>: can change the keeper and the fee, capped in code at 10% of interest. Cannot touch deposits.</li></ul></div>
@@ -399,6 +426,9 @@ document.addEventListener('click', (e) => {
       await loadAcct(true); route(true);
     }),
     'tg-unlink': () => busy(b, '…', async () => { const sig = await signAction('unlink telegram'); await api('/api/telegram/unlink', { owner: S.owner, ...sig }); await loadAcct(true); route(true); }),
+    feedback: feedbackSheet,
+    star: () => { S.stars = Number(b.dataset.v); document.querySelectorAll('.stars button').forEach((x) => { const on = Number(x.dataset.v) <= S.stars; x.classList.toggle('on', on); x.setAttribute('aria-checked', String(Number(x.dataset.v) === S.stars)); }); },
+    'do-feedback': () => busy(b, 'Sign in your wallet…', sendFeedback),
     period: () => { S.period = b.dataset.v; route(true); },
     retry: () => route(),
   }[act];
