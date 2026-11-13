@@ -33,7 +33,7 @@ Free up to $100 saved. Above that, MezGuard keeps 10% of the **interest**, never
 | | Address |
 |---|---|
 | MezGuardFactory (verified) | `0x73C0Dc60D6Ea3bEc8b2a40914f8a2Ff73E2aB5E4` |
-| MezGuardAccount implementation | `0x75DAE3b1d34F4B530f54F49338a117d4528b3d65` |
+| MezGuardAccount implementation (verified) | `0x75DAE3b1d34F4B530f54F49338a117d4528b3d65` |
 | Mezo sMUSD vault | `0x6f461c68B2c5492C0F5CCEc5a264d692aA7A8e16` |
 | MUSD | `0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503` |
 
@@ -53,4 +53,4 @@ FORK=testnet npx hardhat test      # 9 tests against a fork of Mezo with the rea
 - On mainnet, the full MezGuard account contracts (automatic exit, gasless, on-chain fee) are not deployed yet. Mainnet uses direct mode, where the saver confirms each action. The contracts run on testnet and are ready to deploy.
 - Testnet's vault pays interest in lumps, so reports also show what your balance earns at Mezo's live mainnet rate, and label it that way.
 - The keeper is a single server key for now. It can only send funds to their owners.
-- The implementation contract's explorer verification is still pending (the factory is verified).
+
